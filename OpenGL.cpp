@@ -49,8 +49,23 @@ TODO:
 
 =============================================================================*/
 
+// engine-ut99: front-load the C++ STL headers UTGLR pulls from OpenGL.h (<new>/<map>/<vector>) BEFORE
+// Core's headers (via OpenGLDrv.h). Two reasons, both order-sensitive:
+//  1. <new> first => Core's inline operator delete matches <new>'s noexcept spec (C++11+); mirrors
+//     NOpenGLESDrv's glm-before-engine order. Otherwise: "different exception specifier" error.
+//  2. <map> pulls <time.h> (on Emscripten's libc++) => time.h's `clock_t clock(void)` is seen before
+//     Core/UnFile.h defines its `#define clock(Timer)` timing macro, which would otherwise mangle it.
+// OpenGL.h re-includes these (guarded no-op), so nothing changes for the native build.
+#include <new>
+#include <map>
+#include <vector>
+
 #include "OpenGLDrv.h"
 #include "OpenGL.h"
+
+#ifdef UTGLR_USE_GL4ES
+#include "gl4esinit.h"	// engine-ut99: gl4es (desktop GL -> GLES2) init + wrapped proc-address API
+#endif
 
 #ifdef _WIN32
 #include <mmsystem.h>
@@ -1722,7 +1737,11 @@ bool UOpenGLRenderDevice::IsGLExtensionSupported(const char *pExtensionsString, 
 bool UOpenGLRenderDevice::GetGL1Proc(void*& ProcAddress, const char *pName) {
 	guard(UOpenGLRenderDevice::GetGL1Proc);
 
-#ifdef __UNIX__
+#ifdef UTGLR_USE_GL4ES
+	// engine-ut99: resolve GL entry points through gl4es' own wrapper so calls hit the translation
+	// layer (desktop GL -> GLES2), NOT the system GL that SDL_GL_GetProcAddress would return.
+	ProcAddress = (void *)gl4es_GetProcAddress(pName);
+#elif defined __UNIX__
 	ProcAddress = (void *)SDL_GL_GetProcAddress(pName);
 #else
 	ProcAddress = GetProcAddress(hModuleGlMain, pName);
@@ -1774,7 +1793,9 @@ void UOpenGLRenderDevice::GetGLExtProc(void*& ProcAddress, const char *pName, co
 		return;
 	}
 
-#ifdef __UNIX__
+#ifdef UTGLR_USE_GL4ES
+	ProcAddress = (void *)gl4es_GetProcAddress(pName);	// engine-ut99: via gl4es (see GetGL1Proc)
+#elif defined __UNIX__
 	ProcAddress = (void *)SDL_GL_GetProcAddress(pName);
 #else
 	ProcAddress = wglGetProcAddress(pName);
@@ -2208,6 +2229,16 @@ UBOOL UOpenGLRenderDevice::SetRes(INT NewX, INT NewY, INT NewColorBytes, UBOOL F
 
 	AlwaysMipmap = 0;
 	UseVertexSpecular = 1;
+
+#ifdef UTGLR_ENGINE_UT99DC
+	// engine-ut99: UTGLR's UseS3TC config member does not reliably carry its compiled default (1) to
+	// the render-device instance in this engine (the per-param bit-offset trick + CDO/config-load
+	// interaction leaves it 0). Read it straight from the ini with a default of ON, so DXT1/S3TC
+	// textures are used whenever the GPU supports the extensions — otherwise the ENGINE silently
+	// decompresses TEXF_DXT1 to RGBA7 before the driver ever sees it (SupportsTC is engine-visible).
+	// Users can still disable it with [OpenGLDrv.OpenGLRenderDevice] UseS3TC=False.
+	{ UBOOL cfgUseS3TC = 1; GConfig->GetBool(g_pSection, TEXT("UseS3TC"), cfgUseS3TC); UseS3TC = cfgUseS3TC; }
+#endif
 
 	SupportsTC = UseS3TC;
 
@@ -2881,6 +2912,15 @@ UBOOL UOpenGLRenderDevice::Init(UViewport* InViewport, INT NewX, INT NewY, INT N
 
 	debugf(TEXT("Initializing OpenGLDrv..."));
 
+#ifdef __EMSCRIPTEN__
+	// ufront (2.12): the base feature flags + DetailMax now arrive via the shared LoadConfig() in
+	// UNSDLClient::TryRenderDevice (see NSDLClient.cpp) reading [OpenGLDrv.OpenGLRenderDevice]. SupportsFogMaps
+	// is NOT a config prop (a driver capability set only in StaticConstructor, so also 0 on the zero-init web
+	// instance) -> set it here like XOpenGL's Init does, else the engine's fog-map generation gate
+	// (VolumetricLighting && SupportsFogMaps && bFogZone) fails and zone fog is absent.
+	SupportsFogMaps = 1;
+#endif
+
 	if (NumDevices == 0) {
 		g_gammaFirstTime = true;
 		g_haveOriginalGammaRamp = false;
@@ -2891,6 +2931,24 @@ UBOOL UOpenGLRenderDevice::Init(UViewport* InViewport, INT NewX, INT NewY, INT N
 	if (NumDevices == 0) {
 		bool loadRet;
 
+#ifdef UTGLR_ENGINE_UT99DC
+		// engine-ut99: NSDLDrv creates the SDL window + GL context (and thus loads the GL library)
+		// BEFORE the render device's Init runs, and makes it current. SDL_GL_GetProcAddress already
+		// resolves against it, so do NOT call SDL_GL_LoadLibrary here — SDL reports "OpenGL library
+		// already loaded" and UTGLR treats that as fatal. Matches NOpenGLESDrv, which never loads a
+		// GL library itself.
+#ifdef UTGLR_USE_GL4ES
+		// gl4es backend (WebGL path): hand gl4es SDL's loader so it can reach the underlying GLES2
+		// driver, then initialize it (built with NO_INIT_CONSTRUCTOR). GL entry points are then resolved
+		// via gl4es_GetProcAddress (GetGL1Proc/GetGLExtProc), so they hit gl4es' translation layer.
+		setenv("LIBGL_ES", "2", 1);       // target GLES2
+		setenv("LIBGL_NOBANNER", "1", 1); // no gl4es banner on stdout
+		setenv("LIBGL_USEVBO", "0", 1);   // UTGLR feeds client-side vertex arrays
+		set_getprocaddress((void*(*)(const char*))SDL_GL_GetProcAddress);
+		initialize_gl4es();
+#endif
+		GLLoaded = true;
+#else
 		// Bind the library.
 		FString OpenGLLibName;
 		// Default to libGL.so.1 if not defined
@@ -2906,6 +2964,7 @@ UBOOL UOpenGLRenderDevice::Init(UViewport* InViewport, INT NewX, INT NewY, INT N
 			}
 			GLLoaded = true;
 		}
+#endif
 
 		//Get OpenGL 1.x function pointers
 		loadRet = GetGL1Procs();
@@ -3555,6 +3614,16 @@ void UOpenGLRenderDevice::Unlock(UBOOL Blit) {
 	UTGLR_DEBUG_CALL_COUNT(Unlock);
 	guard(UOpenGLRenderDevice::Unlock);
 
+#ifdef UTGLR_ENGINE_UT99DC
+	// engine-ut99: throttled frame heartbeat (mirrors NOpenGLESDrv) — proves the render loop is
+	// actually running under the headless SDL-offscreen oracle. Cheap; every 60th Unlock.
+	{
+		static INT utglr_UnlockCount = 0;
+		if( ((++utglr_UnlockCount) % 60) == 0 )
+			debugf( NAME_Log, TEXT("OpenGLDrv(UTGLR): Unlock %i (Blit=%i)"), utglr_UnlockCount, (INT)Blit );
+	}
+#endif
+
 	EndBuffering();
 
 	SetDefaultAAState();
@@ -3616,8 +3685,8 @@ void UOpenGLRenderDevice::Unlock(UBOOL Blit) {
 
 	//Check for optional frame rate limit
 	if (FrameRateLimit >= 20) {
-#if defined UTGLR_DX_BUILD || defined UTGLR_RUNE_BUILD
-		FLOAT curFrameTimestamp;
+#if defined UTGLR_DX_BUILD || defined UTGLR_RUNE_BUILD || defined UTGLR_ENGINE_UT99DC
+		FLOAT curFrameTimestamp;	// engine-ut99: no FTime type (see OpenGL.h)
 #else
 		FTime curFrameTimestamp;
 #endif
@@ -4332,6 +4401,13 @@ void UOpenGLRenderDevice::DrawTile(FSceneNode* Frame, FTextureInfo& Info, FLOAT 
 	UTGLR_DEBUG_CALL_COUNT(DrawTile);
 	guard(UOpenGLRenderDevice::DrawTile);
 
+	// 2.12 (web): HUD/menu/font/cursor tiles arrive at Z==1 (2D screen-space overlays). UTGLR depth-tests
+	// tiles and relies on its ZRangeHack to sort them on top, but on the web/gl4es path the 3D scene behind
+	// a menu can depth-cull them — the UWindow mouse cursor vanished under UTGLR while XOpenGL (disables
+	// depth for HUD tiles) and SoftDrv (no depth) drew it. Draw 2D-overlay tiles (incoming Z==1) with
+	// depth-test off so they always land on top. Native UTGLR keeps its existing behavior (#ifdef guard).
+	const UBOOL bOverlayTile2D = (Z == 1.f);
+
 	//DrawTile does not use PolyFlags2
 	const DWORD PolyFlags2 = 0;
 
@@ -4350,6 +4426,14 @@ void UOpenGLRenderDevice::DrawTile(FSceneNode* Frame, FTextureInfo& Info, FLOAT 
 			Z = (((Z - 0.5f) / 7.5f) * 4.0f) + 4.0f;
 		}
 	}
+
+#ifdef __EMSCRIPTEN__
+	// See the 2D-overlay note above: draw screen-space overlay tiles with depth-test off (web/gl4es).
+	if (bOverlayTile2D) {
+		EndTileBuffering();
+		glDisable(GL_DEPTH_TEST);
+	}
+#endif
 
 	FLOAT PX1 = X - Frame->FX2;
 	FLOAT PX2 = PX1 + XL;
@@ -4647,6 +4731,12 @@ void UOpenGLRenderDevice::DrawTile(FSceneNode* Frame, FTextureInfo& Info, FLOAT 
 
 		unclock(TileCycles);
 	}
+
+#ifdef __EMSCRIPTEN__
+	// Restore depth-test after a 2D-overlay tile (see the note at the top of DrawTile).
+	if (bOverlayTile2D)
+		glEnable(GL_DEPTH_TEST);
+#endif
 
 	unguard;
 }
@@ -5847,7 +5937,7 @@ void UOpenGLRenderDevice::CacheTextureInfo(FCachedTexture *pBind, const FTexture
 	TCHAR dbgStr[1024];
 	TCHAR numStr[32];
 
-	dbgStr[0] = _T('\0');
+	dbgStr[0] = 0;	// engine-ut99: was _T('\0') (no <tchar.h> on Linux; ANSI TCHAR)
 	appStrcat(dbgStr, TEXT("utglr: ZPBindTree Size = "));
 	for (u = 0; u < NUM_CTTree_TREES; u++) {
 		appSprintf(numStr, TEXT("%u"), m_zeroPrefixBindTrees[u].calc_size());
@@ -5856,7 +5946,7 @@ void UOpenGLRenderDevice::CacheTextureInfo(FCachedTexture *pBind, const FTexture
 	}
 	dbgPrintf("%s\n", appToAnsi(dbgStr));
 
-	dbgStr[0] = _T('\0');
+	dbgStr[0] = 0;	// engine-ut99: was _T('\0') (no <tchar.h> on Linux; ANSI TCHAR)
 	appStrcat(dbgStr, TEXT("utglr: NZPBindTree Size = "));
 	for (u = 0; u < NUM_CTTree_TREES; u++) {
 		appSprintf(numStr, TEXT("%u"), m_nonZeroPrefixBindTrees[u].calc_size());
@@ -6409,7 +6499,7 @@ void UOpenGLRenderDevice::SetTexEnvNoCheck(DWORD texUnit, DWORD texEnvFlags) {
 
 			glTexEnvf(GL_TEXTURE_ENV, GL_RGB_SCALE_EXT, 1.0f);
 		}
-		else {
+		else if (SUPPORTS_GL_NV_texture_env_combine4) {
 			glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE4_NV);
 
 			glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB_EXT, GL_ADD);
@@ -6427,6 +6517,16 @@ void UOpenGLRenderDevice::SetTexEnvNoCheck(DWORD texUnit, DWORD texEnvFlags) {
 			glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE2_ALPHA_EXT, GL_PREVIOUS_EXT);
 
 			glTexEnvf(GL_TEXTURE_ENV, GL_RGB_SCALE_EXT, 1.0f);
+		}
+		else {
+			// ufront (2.12): gl4es/WebGL1 provides NEITHER ATI_texture_env_combine3 NOR
+			// NV_texture_env_combine4, so the vendor COMBINE modes above set an unsupported texenv and the
+			// fog pass produced no output (black fog). SinglePassFog is force-disabled without those
+			// extensions (ConfigValidate_RequiredExtensions), so fog is drawn as its OWN single-texture pass
+			// -> the fog color just needs to reach the framebuffer via the PF_Highlighted blend
+			// (GL_ONE, GL_ONE_MINUS_SRC_ALPHA); a plain MODULATE (fog texel * white primary) does that.
+			// Fixes UTGLR zone fog on the web (gl4es) path.
+			glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
 		}
 	}
 

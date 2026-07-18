@@ -33,7 +33,9 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdarg.h>
-#include <tchar.h>
+#ifndef __UNIX__
+#include <tchar.h>	// engine-ut99: Linux/gcc has no <tchar.h>; the two _T() literals are TEXT() instead
+#endif
 
 
 #include <map>
@@ -354,7 +356,9 @@ typedef struct {
 // An OpenGL rendering device attached to a viewport.
 //
 class UOpenGLRenderDevice : public URenderDevice {
-#if defined UTGLR_DX_BUILD
+#if defined UTGLR_DX_BUILD || defined UTGLR_ENGINE_UT99DC
+	// engine-ut99 (ut99dc / UE1 v400): DECLARE_CLASS is the 3-arg form; the package is
+	// supplied by IMPLEMENT_PACKAGE(OpenGLDrv)/THIS_PACKAGE, not the retail-v436 4-arg macro.
 	DECLARE_CLASS(UOpenGLRenderDevice, URenderDevice, CLASS_Config)
 #else
 	DECLARE_CLASS(UOpenGLRenderDevice, URenderDevice, CLASS_Config, OpenGLDrv)
@@ -630,7 +634,9 @@ class UOpenGLRenderDevice : public URenderDevice {
 	UBOOL UseFragmentProgram;
 	INT SwapInterval;
 	INT FrameRateLimit;
-#if defined UTGLR_DX_BUILD || defined UTGLR_RUNE_BUILD
+#if defined UTGLR_DX_BUILD || defined UTGLR_RUNE_BUILD || defined UTGLR_ENGINE_UT99DC
+	// engine-ut99 (ut99dc / UE1 v400) has no FTime type; the frame-rate limiter stores
+	// appSeconds() (DOUBLE) here, so FLOAT is sufficient and keeps the type present.
 	FLOAT m_prevFrameTimestamp;
 #else
 	FTime m_prevFrameTimestamp;
