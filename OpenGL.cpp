@@ -67,6 +67,12 @@ TODO:
 #include "gl4esinit.h"	// engine-ut99: gl4es (desktop GL -> GLES2) init + wrapped proc-address API
 #endif
 
+#if defined(__EMSCRIPTEN__) && defined(__EMSCRIPTEN_PTHREADS__)
+// ufront 2.13.2 — the engine runs on a worker whose WebGL context SDL does not own, so gl4es is pointed
+// at Emscripten's context-aware resolver instead of SDL's. See the set_getprocaddress call in Init.
+#include <emscripten/html5_webgl.h>
+#endif
+
 #ifdef _WIN32
 #include <mmsystem.h>
 #endif
@@ -2944,7 +2950,16 @@ UBOOL UOpenGLRenderDevice::Init(UViewport* InViewport, INT NewX, INT NewY, INT N
 		setenv("LIBGL_ES", "2", 1);       // target GLES2
 		setenv("LIBGL_NOBANNER", "1", 1); // no gl4es banner on stdout
 		setenv("LIBGL_USEVBO", "0", 1);   // UTGLR feeds client-side vertex arrays
+#if defined(__EMSCRIPTEN__) && defined(__EMSCRIPTEN_PTHREADS__)
+		// ufront 2.13.2: on a threaded web build the engine runs on a worker and NSDLViewport creates the
+		// WebGL context directly with emscripten_webgl_create_context (SDL's EGL path is unusable there —
+		// Emscripten #24792). SDL therefore owns no context and SDL_GL_GetProcAddress resolves against
+		// nothing, so gl4es would get a null backend and every translated call would go nowhere.
+		// Emscripten's resolver is context-aware and works on the worker.
+		set_getprocaddress((void*(*)(const char*))emscripten_webgl_get_proc_address);
+#else
 		set_getprocaddress((void*(*)(const char*))SDL_GL_GetProcAddress);
+#endif
 		initialize_gl4es();
 #endif
 		GLLoaded = true;
