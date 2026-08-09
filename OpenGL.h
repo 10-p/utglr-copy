@@ -51,7 +51,10 @@
 #include "c_gclip.h"
 
 
-#ifdef _WIN32
+// ufront 2.34: these two blocks are MSVC syntax, not Windows syntax — `__asm { mov eax, ... }` (Intel
+// blocks) and `__try/__except` (SEH). MinGW GCC accepts neither, so the gate has to say _MSC_VER. Every
+// use site already has a portable C fallback: it is what the Linux build has always compiled.
+#if defined(_WIN32) && defined(_MSC_VER)
 
 //Optional ASM code
 #define UTGLR_USE_ASM_CODE
@@ -338,7 +341,7 @@ struct FGLMapDot {
 };
 
 
-#ifdef _WIN32
+#ifdef UTGLR_USE_WGL
 typedef struct {
 	PFNWGLCHOOSEPIXELFORMATARBPROC p_wglChoosePixelFormatARB;
 	bool haveWGLMultisampleARB;
@@ -516,7 +519,7 @@ class UOpenGLRenderDevice : public URenderDevice {
 		BYTE blue[256];
 	};
 
-#ifdef _WIN32
+#ifdef UTGLR_USE_WGL
 	// Permanent variables.
 	HGLRC m_hRC;
 	HWND m_hWnd;
@@ -778,7 +781,7 @@ class UOpenGLRenderDevice : public URenderDevice {
 	static INT NumDevices;
 	static INT LockCount;
 
-#ifdef _WIN32
+#ifdef UTGLR_USE_WGL
 	static HGLRC   hCurrentRC;
 	static HMODULE hModuleGlMain;
 	static TArray<HGLRC> AllContexts;
@@ -788,7 +791,7 @@ class UOpenGLRenderDevice : public URenderDevice {
 
 	static bool g_gammaFirstTime;
 	static bool g_haveOriginalGammaRamp;
-#ifdef _WIN32
+#ifdef UTGLR_USE_WGL
 	static FGammaRamp g_originalGammaRamp;
 #endif
 
@@ -1067,7 +1070,7 @@ class UOpenGLRenderDevice : public URenderDevice {
 	void ConfigValidate_RequiredExtensions(void);
 	void ConfigValidate_Main(void);
 
-#ifdef _WIN32
+#ifdef UTGLR_USE_WGL
 	void FASTCALL InitARBPixelFormat(INT NewColorBytes, InitARBPixelFormatRet_t *pRet);
 	static LRESULT CALLBACK InitARBPixelFormatWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
@@ -1076,7 +1079,7 @@ class UOpenGLRenderDevice : public URenderDevice {
 #endif
 
 
-#ifndef __UNIX__
+#ifdef UTGLR_USE_WGL
 	void PrintFormat(HDC hDC, INT nPixelFormat) {
 		guard(UOpenGlRenderDevice::PrintFormat);
 		TCHAR Flags[1024] = TEXT("");

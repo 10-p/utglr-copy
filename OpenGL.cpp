@@ -1673,7 +1673,7 @@ void UOpenGLRenderDevice::SetGamma(FLOAT GammaCorrection) {
 
 	BuildGammaRamp(GammaCorrection + GammaOffsetRed, GammaCorrection + GammaOffsetGreen, GammaCorrection + GammaOffsetBlue, Brightness, gammaRamp);
 
-#ifdef __UNIX__
+#ifdef UTGLR_USE_SDL
 	SDL_SetGammaRamp( gammaRamp.red, gammaRamp.green, gammaRamp.blue );
 #else
 	//Remember previous gamma ramp setting
@@ -1696,7 +1696,7 @@ void UOpenGLRenderDevice::SetGamma(FLOAT GammaCorrection) {
 }
 
 void UOpenGLRenderDevice::ResetGamma(void) {
-#ifdef __UNIX__
+#ifdef UTGLR_USE_SDL
 
 #else
 	//Restore gamma ramp if original was successfully saved
@@ -1747,7 +1747,7 @@ bool UOpenGLRenderDevice::GetGL1Proc(void*& ProcAddress, const char *pName) {
 	// engine-ut99: resolve GL entry points through gl4es' own wrapper so calls hit the translation
 	// layer (desktop GL -> GLES2), NOT the system GL that SDL_GL_GetProcAddress would return.
 	ProcAddress = (void *)gl4es_GetProcAddress(pName);
-#elif defined __UNIX__
+#elif defined UTGLR_USE_SDL
 	ProcAddress = (void *)SDL_GL_GetProcAddress(pName);
 #else
 	ProcAddress = GetProcAddress(hModuleGlMain, pName);
@@ -1801,7 +1801,7 @@ void UOpenGLRenderDevice::GetGLExtProc(void*& ProcAddress, const char *pName, co
 
 #ifdef UTGLR_USE_GL4ES
 	ProcAddress = (void *)gl4es_GetProcAddress(pName);	// engine-ut99: via gl4es (see GetGL1Proc)
-#elif defined __UNIX__
+#elif defined UTGLR_USE_SDL
 	ProcAddress = (void *)SDL_GL_GetProcAddress(pName);
 #else
 	ProcAddress = wglGetProcAddress(pName);
@@ -1839,7 +1839,7 @@ void UOpenGLRenderDevice::Exit() {
 	guard(UOpenGLRenderDevice::Exit);
 	check(NumDevices > 0);
 
-#ifdef __UNIX__
+#ifdef UTGLR_USE_SDL
 	UnsetRes();
 
 	// Shut down global GL.
@@ -1934,7 +1934,7 @@ UBOOL UOpenGLRenderDevice::SetRes(INT NewX, INT NewY, INT NewColorBytes, UBOOL F
 	//Display debug bits
 	if (DebugBit(DEBUG_BIT_ANY)) dbgPrintf("utglr: DebugBits = %u\n", m_debugBits);
 
-#ifdef __UNIX__
+#ifdef UTGLR_USE_SDL
 	UnsetRes();
 
 	INT MinDepthBits;
@@ -2095,7 +2095,7 @@ UBOOL UOpenGLRenderDevice::SetRes(INT NewX, INT NewY, INT NewColorBytes, UBOOL F
 		debugf(NAME_Init, TEXT("GL_EXTENSIONS : %s"), appFromAnsi(pGLExtensions));
 	}
 	else {
-#ifdef __UNIX__
+#ifdef UTGLR_USE_SDL
 		printf("GL_EXTENSIONS : %s\n", pGLExtensions);
 #endif
 	}
@@ -2185,7 +2185,7 @@ UBOOL UOpenGLRenderDevice::SetRes(INT NewX, INT NewY, INT NewColorBytes, UBOOL F
 	//Special handling for WGL_EXT_swap_control
 	//Restricted to a maximum of 10
 	if ((SwapInterval >= 0) && (SwapInterval <= 10)) {
-#ifdef _WIN32
+#ifdef UTGLR_USE_WGL
 		const char *pWGLExtensions = NULL;
 		PFNWGLGETEXTENSIONSSTRINGARBPROC p_wglGetExtensionsStringARB = reinterpret_cast<PFNWGLGETEXTENSIONSSTRINGARBPROC>(wglGetProcAddress("wglGetExtensionsStringARB"));
 		if (p_wglGetExtensionsStringARB != NULL) {
@@ -2508,7 +2508,7 @@ UBOOL UOpenGLRenderDevice::SetRes(INT NewX, INT NewY, INT NewColorBytes, UBOOL F
 void UOpenGLRenderDevice::UnsetRes() {
 	guard(UOpenGLRenderDevice::UnsetRes);
 
-#ifdef _WIN32
+#ifdef UTGLR_USE_WGL
 	check(m_hRC)
 #endif
 
@@ -2528,7 +2528,7 @@ void UOpenGLRenderDevice::UnsetRes() {
 	//Free vertex and fragment programs if they were allocated and leave vertex and fragment program modes if necessary
 	ShutdownFragmentProgramMode();
 
-#ifdef _WIN32
+#ifdef UTGLR_USE_WGL
 	hCurrentRC = NULL;
 	wglMakeCurrent(NULL, NULL);
 //	verify(wglDeleteContext(m_hRC));
@@ -2546,7 +2546,7 @@ void UOpenGLRenderDevice::UnsetRes() {
 
 void UOpenGLRenderDevice::MakeCurrent(void) {
 	guard(UOpenGLRenderDevice::MakeCurrent);
-#ifdef _WIN32
+#ifdef UTGLR_USE_WGL
 	check(m_hRC);
 	check(m_hDC);
 	if (hCurrentRC != m_hRC) {
@@ -2636,7 +2636,7 @@ void UOpenGLRenderDevice::ConfigValidate_Main(void) {
 }
 
 
-#ifdef _WIN32
+#ifdef UTGLR_USE_WGL
 void UOpenGLRenderDevice::InitARBPixelFormat(INT NewColorBytes, InitARBPixelFormatRet_t *pRet) {
 	guard(UOpenGLRenderDevice::InitARBPixelFormat);
 
@@ -2932,7 +2932,7 @@ UBOOL UOpenGLRenderDevice::Init(UViewport* InViewport, INT NewX, INT NewY, INT N
 		g_haveOriginalGammaRamp = false;
 	}
 
-#ifdef __UNIX__
+#ifdef UTGLR_USE_SDL
 	// Init global GL.
 	if (NumDevices == 0) {
 		bool loadRet;
@@ -3054,7 +3054,7 @@ UBOOL UOpenGLRenderDevice::Init(UViewport* InViewport, INT NewX, INT NewY, INT N
 
 	Viewport = InViewport;
 
-#ifndef __UNIX__
+#ifdef UTGLR_USE_WGL
 	m_hWnd = (HWND)InViewport->GetWindow();
 	check(m_hWnd);
 	m_hDC = GetDC(m_hWnd);
@@ -3094,7 +3094,7 @@ UBOOL UOpenGLRenderDevice::Exec(const TCHAR* Cmd, FOutputDevice& Ar) {
 			return 1;
 		}
 		else if (ParseCommand(&Cmd, TEXT("BUILD"))) {
-#ifdef __UNIX__
+#ifdef UTGLR_USE_SDL
 			debugf(TEXT("OpenGL renderer built: %s %s"), __DATE__, __TIME__);
 #else
 			debugf(TEXT("OpenGL renderer built: VOGEL FIXME"));
@@ -3112,7 +3112,7 @@ UBOOL UOpenGLRenderDevice::Exec(const TCHAR* Cmd, FOutputDevice& Ar) {
 		return 0;
 	}
 	else if (ParseCommand(&Cmd, TEXT("GetRes"))) {
-#ifdef __UNIX__
+#ifdef UTGLR_USE_SDL
 		// Changing Resolutions:
 		// Entries in the resolution box in the console is
 		// apparently controled building a string of relevant
@@ -3656,7 +3656,7 @@ void UOpenGLRenderDevice::Unlock(UBOOL Blit) {
 		CheckGLErrorFlag(TEXT("please report this bug"));
 
 		//Swap buffers
-#ifdef __UNIX__
+#ifdef UTGLR_USE_SDL
 		SDL_GL_SwapBuffers();
 #else
 		{
@@ -8133,7 +8133,7 @@ void UOpenGLRenderDevice::EndTileBufferingNoCheck(void) {
 // Static variables.
 INT UOpenGLRenderDevice::NumDevices = 0;
 INT UOpenGLRenderDevice::LockCount  = 0;
-#ifdef _WIN32
+#ifdef UTGLR_USE_WGL
 HGLRC   UOpenGLRenderDevice::hCurrentRC    = NULL;
 HMODULE UOpenGLRenderDevice::hModuleGlMain = NULL;
 TArray<HGLRC> UOpenGLRenderDevice::AllContexts;
@@ -8143,7 +8143,7 @@ UBOOL UOpenGLRenderDevice::GLLoaded = false;
 
 bool UOpenGLRenderDevice::g_gammaFirstTime = false;
 bool UOpenGLRenderDevice::g_haveOriginalGammaRamp = false;
-#ifdef _WIN32
+#ifdef UTGLR_USE_WGL
 UOpenGLRenderDevice::FGammaRamp UOpenGLRenderDevice::g_originalGammaRamp;
 #endif
 

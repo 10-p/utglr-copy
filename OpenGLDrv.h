@@ -16,7 +16,12 @@
 
 #ifdef WIN32
 #include <windows.h>
-#else
+#endif
+// engine-ut99 (ufront 2.34): SDL2 is needed on EVERY platform this fork builds for, Windows included —
+// NSDLDrv owns the window, the GL context and the buffer swap there exactly as it does on Linux and the
+// web, so the SDL2 shims below compile in on MinGW too. Upstream UTGLR (MSVC, its own WGL window) keeps
+// the original "Windows means no SDL" arrangement.
+#if !defined(WIN32) || defined(UTGLR_ENGINE_UT99DC)
 #include "SDL2/SDL.h"	// engine-ut99: SDL2 (was SDL 1.2 <SDL/SDL.h>); NSDLDrv owns the window/context
 #endif
 #include <GL/gl.h>
@@ -27,7 +32,19 @@
 #include <GL/glext.h>
 #endif
 
-#if defined(UTGLR_ENGINE_UT99DC) && defined(__UNIX__)
+// ufront 2.34 — "this build owns a WGL context" is NOT the same thing as "this build targets Windows".
+// Every engine-ut99 target drives UTGLR through NSDLDrv/SDL2, so the pixel-format / HGLRC / gamma-ramp
+// paths stay out of the MinGW build as well; SDL creates the one context and makes it current. (Same
+// fix and same reasoning as engine-ut2004's UT_OPENGLDRV_WGL in ufront 2.33.)
+#if defined(WIN32) && !defined(UTGLR_ENGINE_UT99DC)
+#define UTGLR_USE_WGL 1
+#else
+// SDL owns the window, the GL context, the swap and the gamma ramp. This is what these sources used
+// to spell `__UNIX__` — a name that stopped being true when this fork gained a Windows SDL target.
+#define UTGLR_USE_SDL 1
+#endif
+
+#if defined(UTGLR_ENGINE_UT99DC)
 /*-----------------------------------------------------------------------------
 	SDL 1.2 -> SDL2 compatibility shims (engine-ut99, gated).
 
