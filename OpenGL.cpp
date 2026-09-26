@@ -1083,6 +1083,9 @@ static void FASTCALL Buffer3Verts(UOpenGLRenderDevice *pRD, FTransTexture** Pts)
 		else if (pRD->m_requestedColorFlags & UOpenGLRenderDevice::CF_COLOR_ARRAY) {
 #ifdef UTGLR_RUNE_BUILD
 			pSingleColorArray->color = UOpenGLRenderDevice::FPlaneTo_RGB_Aub(&P->Light, pRD->m_gpAlpha);
+#elif defined(UTGLR_ENGINE_HP2)
+			//hp2: straight-alpha polys carry their opacity per vertex in Light.W (Render/Src/UnMeshRnLOD.h)
+			pSingleColorArray->color = pRD->m_hp2VertexAlpha ? UOpenGLRenderDevice::FPlaneTo_RGBA(&P->Light) : UOpenGLRenderDevice::FPlaneTo_RGB_A255(&P->Light);
 #else
 			pSingleColorArray->color = UOpenGLRenderDevice::FPlaneTo_RGB_A255(&P->Light);
 #endif
@@ -1572,6 +1575,8 @@ void UOpenGLRenderDevice::BufferAdditionalClippedVerts(FTransTexture** Pts, INT 
 		else if (m_requestedColorFlags & CF_COLOR_ARRAY) {
 #ifdef UTGLR_RUNE_BUILD
 			SingleColorArray[BufferedVerts].color = FPlaneTo_RGB_Aub(&P->Light, m_gpAlpha);
+#elif defined(UTGLR_ENGINE_HP2)
+			SingleColorArray[BufferedVerts].color = m_hp2VertexAlpha ? FPlaneTo_RGBA(&P->Light) : FPlaneTo_RGB_A255(&P->Light);
 #else
 			SingleColorArray[BufferedVerts].color = FPlaneTo_RGB_A255(&P->Light);
 #endif
@@ -4218,6 +4223,9 @@ void UOpenGLRenderDevice::DrawGouraudPolygonOld(FSceneNode* Frame, FTextureInfo&
 		if (m_requestedColorFlags & CF_COLOR_ARRAY) {
 #ifdef UTGLR_RUNE_BUILD
 			SingleColorArray[Index].color = FPlaneTo_RGB_Aub(&P->Light, alpha);
+#elif defined(UTGLR_ENGINE_HP2)
+			//hp2: straight-alpha polys carry their opacity per vertex in Light.W
+			SingleColorArray[Index].color = (PolyFlags & PF_AlphaBlend) ? FPlaneTo_RGBA(&P->Light) : FPlaneTo_RGB_A255(&P->Light);
 #else
 			SingleColorArray[Index].color = FPlaneTo_RGB_A255(&P->Light);
 #endif
@@ -4237,7 +4245,7 @@ void UOpenGLRenderDevice::DrawGouraudPolygonOld(FSceneNode* Frame, FTextureInfo&
 
 #ifdef UTGLR_RUNE_BUILD
 	if ((PolyFlags & (PF_RenderFog | PF_Translucent | PF_Modulated | PF_AlphaBlend)) == PF_RenderFog) {
-#elif UTGLR_UNREAL_227_BUILD
+#elif defined(UTGLR_HAS_ALPHABLEND)	// Unreal 227, HP2: alpha-blended polys get no additive fog pass
 	if ((PolyFlags & (PF_RenderFog | PF_Translucent | PF_Modulated | PF_AlphaBlend)) == PF_RenderFog) {
 #else
 	if ((PolyFlags & (PF_RenderFog | PF_Translucent | PF_Modulated)) == PF_RenderFog) {
@@ -4397,7 +4405,7 @@ void UOpenGLRenderDevice::DrawGouraudPolygon(FSceneNode* Frame, FTextureInfo& In
 
 #ifdef UTGLR_RUNE_BUILD
 			if (((PolyFlags & (PF_RenderFog | PF_Translucent | PF_Modulated | PF_AlphaBlend)) == PF_RenderFog) && UseVertexSpecular) {
-#elif UTGLR_UNREAL_227_BUILD
+#elif defined(UTGLR_HAS_ALPHABLEND)	// Unreal 227, HP2
 			if (((PolyFlags & (PF_RenderFog | PF_Translucent | PF_Modulated | PF_AlphaBlend)) == PF_RenderFog) && UseVertexSpecular) {
 #else
 			if (((PolyFlags & (PF_RenderFog | PF_Translucent | PF_Modulated)) == PF_RenderFog) && UseVertexSpecular) {
@@ -4439,6 +4447,13 @@ void UOpenGLRenderDevice::DrawGouraudPolygon(FSceneNode* Frame, FTextureInfo& In
 		m_gpAlpha = 255;
 		if (PolyFlags & PF_AlphaBlend) {
 			m_gpAlpha = appRound(Info.Texture->Alpha * 255.0f);
+			m_pBuffer3VertsProc = Buffer3Verts;
+		}
+#elif defined(UTGLR_ENGINE_HP2)
+		//hp2: a straight-alpha batch (PF_Highlighted|PF_Translucent from HP2AdjustPolyFlags) takes its vertex
+		//alpha from Light.W; only the generic Buffer3Verts writes it (modulated batches use constant white)
+		m_hp2VertexAlpha = ((PolyFlags & PF_AlphaBlend) && (m_requestedColorFlags & CF_COLOR_ARRAY)) ? true : false;
+		if (m_hp2VertexAlpha) {
 			m_pBuffer3VertsProc = Buffer3Verts;
 		}
 #endif
@@ -6418,7 +6433,7 @@ void UOpenGLRenderDevice::SetBlendNoCheck(DWORD blendFlags) {
 
 #ifdef UTGLR_RUNE_BUILD
 	const DWORD GL_BLEND_FLAG_BITS = PF_Translucent | PF_Modulated | PF_Highlighted | PF_AlphaBlend;
-#elif UTGLR_UNREAL_227_BUILD
+#elif defined(UTGLR_HAS_ALPHABLEND)	// Unreal 227, HP2
 	const DWORD GL_BLEND_FLAG_BITS = PF_Translucent | PF_Modulated | PF_Highlighted | PF_AlphaBlend;
 #else
 	const DWORD GL_BLEND_FLAG_BITS = PF_Translucent | PF_Modulated | PF_Highlighted;
@@ -6445,7 +6460,7 @@ void UOpenGLRenderDevice::SetBlendNoCheck(DWORD blendFlags) {
 			else if (blendFlags & PF_AlphaBlend) {
 				glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 			}
-#elif UTGLR_UNREAL_227_BUILD
+#elif defined(UTGLR_HAS_ALPHABLEND)	// Unreal 227, HP2: straight alpha
 			else if (blendFlags & PF_AlphaBlend) {
 				glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 			}

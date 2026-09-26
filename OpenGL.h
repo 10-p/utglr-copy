@@ -1333,6 +1333,14 @@ class UOpenGLRenderDevice : public URenderDevice {
 			}
 		}
 		else
+#elif defined(UTGLR_ENGINE_HP2)
+		//hp2: straight alpha (vertex-alpha actors, Lumos surfaces) never gains PF_Occlude here: depth writes
+		//follow the incoming flags (Render decided them for Lumos; D3D7 433 AdjustPolyFlags gives blended
+		//polys no Occlude). Alpha blending already hides masked-out texels.
+		if (PolyFlags & PF_AlphaBlend) {
+			PolyFlags &= ~PF_Masked;
+		}
+		else
 #endif
 		if (!(PolyFlags & (PF_Translucent | PF_Modulated | PF_Highlighted))) {
 			PolyFlags |= PF_Occlude;
@@ -1344,7 +1352,7 @@ class UOpenGLRenderDevice : public URenderDevice {
 		//Only check relevant blend flags
 #ifdef UTGLR_RUNE_BUILD
 		DWORD blendFlags = PolyFlags & (PF_Translucent | PF_Modulated | PF_Invisible | PF_Occlude | PF_Masked | PF_Highlighted | PF_AlphaBlend);
-#elif  UTGLR_UNREAL_227_BUILD
+#elif defined(UTGLR_HAS_ALPHABLEND)	// Unreal 227, HP2
 		DWORD blendFlags = PolyFlags & (PF_Translucent | PF_Modulated | PF_Invisible | PF_Occlude | PF_Masked | PF_Highlighted | PF_AlphaBlend);
 #else
 		DWORD blendFlags = PolyFlags & (PF_Translucent | PF_Modulated | PF_Invisible | PF_Occlude | PF_Masked | PF_Highlighted);
