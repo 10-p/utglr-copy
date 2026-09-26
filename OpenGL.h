@@ -29,6 +29,29 @@
 #undef UTGLR_VALID_BUILD_CONFIG
 
 
+// ufront (hp2): engine-face selection. Three macros, three meanings:
+//   UTGLR_ENGINE_UT99DC — the ufront PLATFORM layer (SDL2 shims, NSDLDrv-owned context, gl4es, web tweaks).
+//                         Defined by every ufront build: UT99 v400 and HP2 433 alike.
+//   UTGLR_ENGINE_V400   — derived: the ut99dc ENGINE TYPES (3-arg DECLARE_CLASS, no FTime). UT99 v400 only.
+//                         HP2 433 has upstream v436's types (4-arg DECLARE_CLASS, FTime), so it takes the
+//                         upstream UTGLR_UT_BUILD branches at those sites instead.
+//   UTGLR_ENGINE_HP2    — UE1 build 433 (Harry Potter 2): its render-device face (5-arg DrawComplexSurface
+//                         with Lumos cAlpha, MaxVertices, DrawTriangles) and its blend semantics.
+// UTGLR_HAS_ALPHABLEND is the feature macro for upstream's Rune/227 PF_AlphaBlend plumbing (straight alpha
+// blend, no additive fog pass), which HP2 reuses for its Highlighted|Translucent vertex-alpha mode and Lumos.
+#if defined(UTGLR_ENGINE_UT99DC) && !defined(UTGLR_ENGINE_HP2)
+#define UTGLR_ENGINE_V400 1
+#endif
+#if defined(UTGLR_RUNE_BUILD) || defined(UTGLR_UNREAL_227_BUILD) || defined(UTGLR_ENGINE_HP2)
+#define UTGLR_HAS_ALPHABLEND 1
+#endif
+#if defined(UTGLR_ENGINE_HP2)
+// Synthetic, driver-internal: 0x20000000 is the one EPolyFlags bit build 433 leaves unassigned
+// (Engine/Inc/UnObj.h). Content never sets it; every HP2 entry point strips it from incoming flags.
+#define PF_AlphaBlend 0x20000000
+#endif
+
+
 #include <math.h>
 #include <string.h>
 #include <stdio.h>
@@ -359,11 +382,12 @@ typedef struct {
 // An OpenGL rendering device attached to a viewport.
 //
 class UOpenGLRenderDevice : public URenderDevice {
-#if defined UTGLR_DX_BUILD || defined UTGLR_ENGINE_UT99DC
+#if defined UTGLR_DX_BUILD || defined UTGLR_ENGINE_V400
 	// engine-ut99 (ut99dc / UE1 v400): DECLARE_CLASS is the 3-arg form; the package is
 	// supplied by IMPLEMENT_PACKAGE(OpenGLDrv)/THIS_PACKAGE, not the retail-v436 4-arg macro.
 	DECLARE_CLASS(UOpenGLRenderDevice, URenderDevice, CLASS_Config)
 #else
+	// Upstream v436 — and HP2 433, whose DECLARE_CLASS is the same strict 4-arg macro.
 	DECLARE_CLASS(UOpenGLRenderDevice, URenderDevice, CLASS_Config, OpenGLDrv)
 #endif
 
@@ -637,11 +661,12 @@ class UOpenGLRenderDevice : public URenderDevice {
 	UBOOL UseFragmentProgram;
 	INT SwapInterval;
 	INT FrameRateLimit;
-#if defined UTGLR_DX_BUILD || defined UTGLR_RUNE_BUILD || defined UTGLR_ENGINE_UT99DC
+#if defined UTGLR_DX_BUILD || defined UTGLR_RUNE_BUILD || defined UTGLR_ENGINE_V400
 	// engine-ut99 (ut99dc / UE1 v400) has no FTime type; the frame-rate limiter stores
 	// appSeconds() (DOUBLE) here, so FLOAT is sufficient and keeps the type present.
 	FLOAT m_prevFrameTimestamp;
 #else
+	// Upstream v436 and HP2 433: appSeconds() returns FTime (FTime - FTime -> float).
 	FTime m_prevFrameTimestamp;
 #endif
 	UBOOL SceneNodeHack;

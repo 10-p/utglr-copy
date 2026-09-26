@@ -3700,7 +3700,7 @@ void UOpenGLRenderDevice::Unlock(UBOOL Blit) {
 
 	//Check for optional frame rate limit
 	if (FrameRateLimit >= 20) {
-#if defined UTGLR_DX_BUILD || defined UTGLR_RUNE_BUILD || defined UTGLR_ENGINE_UT99DC
+#if defined UTGLR_DX_BUILD || defined UTGLR_RUNE_BUILD || defined UTGLR_ENGINE_V400
 		FLOAT curFrameTimestamp;	// engine-ut99: no FTime type (see OpenGL.h)
 #else
 		FTime curFrameTimestamp;
