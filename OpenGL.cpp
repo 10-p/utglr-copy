@@ -2609,6 +2609,12 @@ void UOpenGLRenderDevice::ConfigValidate_RefreshDCV(void) {
 void UOpenGLRenderDevice::ConfigValidate_RequiredExtensions(void) {
 	if (!SUPPORTS_GL_ARB_vertex_program) UseFragmentProgram = 0;
 	if (!SUPPORTS_GL_ARB_fragment_program) UseFragmentProgram = 0;
+#ifdef UTGLR_ENGINE_HP2
+	//hp2: the ARB fragment-program complex-surface programs read the primary colour's alpha as their lightmap
+	//scale selector (OneXBlending), so they cannot carry a Lumos surface's opacity (cAlpha). Off-by-default
+	//legacy path (and unavailable on gl4es/WebGL); HP2 keeps to the fixed-function path, which does.
+	UseFragmentProgram = 0;
+#endif
 	if (!SUPPORTS_GL_EXT_bgra) UseBGRATextures = 0;
 	if (!SUPPORTS_GL_EXT_multi_draw_arrays) UseMultiDrawArrays = 0;
 	if (!SUPPORTS_GL_EXT_paletted_texture) UsePalette = 0;
@@ -6604,7 +6610,35 @@ void UOpenGLRenderDevice::SetTexEnvNoCheck(DWORD texUnit, DWORD texEnvFlags) {
 			glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE1_ALPHA_EXT, GL_PREVIOUS_EXT);
 
 			glTexEnvf(GL_TEXTURE_ENV, GL_RGB_SCALE_EXT, 2.0f);
+#ifdef UTGLR_ENGINE_HP2
+			if (texUnit != 0) {
+				//hp2: a modulating unit after the base (lightmap, macro) passes the base alpha through instead of
+				//multiplying in its own: UTGLR uploads RGBA7 lightmaps x2 including A, which would otherwise
+				//scale a Lumos surface's opacity texel by texel. Only masked/alpha-blended bases read this alpha.
+				glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA_EXT, GL_REPLACE);
+				glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_ALPHA_EXT, GL_PREVIOUS_EXT);
+			}
+#endif
 		}
+#ifdef UTGLR_ENGINE_HP2
+		else if ((texUnit != 0) && SUPPORTS_GL_EXT_texture_env_combine) {
+			//hp2, OneXBlending: the same alpha pass-through at 1x colour scale (plain GL_MODULATE would multiply alpha)
+			glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE_EXT);
+
+			glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB_EXT, GL_MODULATE);
+			glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA_EXT, GL_REPLACE);
+
+			glTexEnvi(GL_TEXTURE_ENV, GL_OPERAND0_RGB_EXT, GL_SRC_COLOR);
+			glTexEnvi(GL_TEXTURE_ENV, GL_OPERAND1_RGB_EXT, GL_SRC_COLOR);
+
+			glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_RGB_EXT, GL_TEXTURE);
+			glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE1_RGB_EXT, GL_PREVIOUS_EXT);
+
+			glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_ALPHA_EXT, GL_PREVIOUS_EXT);
+
+			glTexEnvf(GL_TEXTURE_ENV, GL_RGB_SCALE_EXT, 1.0f);
+		}
+#endif
 		else {
 			glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
 		}
@@ -7339,6 +7373,18 @@ void UOpenGLRenderDevice::RenderPassesNoCheckSetup(void) {
 	SetDefaultShaderState();
 
 	glColor3fv(m_complexSurfaceColor3f_1f);
+#ifdef UTGLR_ENGINE_HP2
+	if (MultiPass.TMU[0].PolyFlags & PF_AlphaBlend) {
+		//hp2 Lumos: opacity rides the primary colour's alpha -> unit 0 alpha = texA * opacity; the lightmap/macro
+		//units pass it through untouched (SetTexEnvNoCheck), so the blender sees exactly texA * (1 - cAlpha/255)
+		glColor4f(m_complexSurfaceColor3f_1f[0], m_complexSurfaceColor3f_1f[1], m_complexSurfaceColor3f_1f[2], m_hp2SurfOpacity);
+	}
+	else if ((m_hp2SurfOpacity < 1.0f) && (MultiPass.TMU[0].PolyFlags == PF_Highlighted)) {
+		//hp2 Lumos: the separate fog-map pass over a see-through surface is premultiplied (GL_ONE,
+		//GL_ONE_MINUS_SRC_ALPHA): scale all four channels so the fog fades with the surface
+		glColor4f(m_hp2SurfOpacity, m_hp2SurfOpacity, m_hp2SurfOpacity, m_hp2SurfOpacity);
+	}
+#endif
 
 	SetBlend(MultiPass.TMU[0].PolyFlags);
 
