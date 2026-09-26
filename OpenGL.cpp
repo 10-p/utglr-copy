@@ -4920,8 +4920,17 @@ void UOpenGLRenderDevice::Draw3DLine(FSceneNode* Frame, FPlane Color, DWORD Line
 	SetDefaultShaderState();
 	SetDefaultTextureState();
 
+#ifdef UTGLR_ENGINE_HP2
+	//433 LINE_PreTransformed: the points are already in camera space (mirrors URenderDevice::Draw3DLine,
+	//Engine/Src/UnCamera.cpp; no HP2 caller passes it today)
+	if (!(LineFlags & LINE_PreTransformed)) {
+		P1 = P1.TransformPointBy(Frame->Coords);
+		P2 = P2.TransformPointBy(Frame->Coords);
+	}
+#else
 	P1 = P1.TransformPointBy(Frame->Coords);
 	P2 = P2.TransformPointBy(Frame->Coords);
+#endif
 	if (Frame->Viewport->IsOrtho()) {
 		// Zoom.
 		FLOAT rcpZoom = 1.0f / Frame->Zoom;
