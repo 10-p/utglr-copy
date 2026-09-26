@@ -784,6 +784,12 @@ class UOpenGLRenderDevice : public URenderDevice {
 
 	BYTE m_gpAlpha;
 	bool m_gpFogEnabled;
+#ifdef UTGLR_ENGINE_HP2
+	//hp2: opacity of the Lumos complex surface being drawn (1 - cAlpha/255), 1 for every other surface
+	FLOAT m_hp2SurfOpacity;
+	//hp2: the buffered gouraud batch is straight-alpha (PF_AlphaBlend) and takes its vertex alpha from Light.W
+	bool m_hp2VertexAlpha;
+#endif
 
 	DWORD m_curTexEnvFlags[MAX_TMUNITS];
 	FTexInfo TexInfo[MAX_TMUNITS];
@@ -1142,7 +1148,18 @@ class UOpenGLRenderDevice : public URenderDevice {
 	void Unlock(UBOOL Blit);
 	void Flush(UBOOL AllowPrecache);
 
+#ifdef UTGLR_ENGINE_HP2
+	// UE1 build 433 render-device face (HP2 Engine/Inc/UnRenDev.h): 5-arg DrawComplexSurface (the flags to
+	// draw with + Lumos transparency), MaxVertices, DrawTriangles. On 433 URenderDevice::DrawGouraudPolygon is
+	// a non-pure forwarder to DrawTriangles that drivers must NOT override, so UTGLR's buffered gouraud body
+	// lives on below as the non-virtual HP2DrawGouraudPolygon, fed by DrawTriangles.
+	void DrawComplexSurface(FSceneNode* Frame, FSurfaceInfo& Surface, FSurfaceFacet& Facet, DWORD PolyFlags, BYTE cAlpha);
+	INT MaxVertices();
+	void DrawTriangles(FSceneNode* Frame, FTextureInfo& Info, FTransTexture** Pts, INT NumPts, _WORD* Indices, INT NumIndices, DWORD PolyFlags, FSpanBuffer* Span);
+	static DWORD FASTCALL HP2AdjustPolyFlags(DWORD PolyFlags);
+#else
 	void DrawComplexSurface(FSceneNode* Frame, FSurfaceInfo& Surface, FSurfaceFacet& Facet);
+#endif
 #ifdef UTGLR_RUNE_BUILD
 	void PreDrawFogSurface();
 	void PostDrawFogSurface();
@@ -1151,7 +1168,11 @@ class UOpenGLRenderDevice : public URenderDevice {
 	void PostDrawGouraud(FLOAT FogDistance);
 #endif
 	void DrawGouraudPolygonOld(FSceneNode* Frame, FTextureInfo& Info, FTransTexture** Pts, INT NumPts, DWORD PolyFlags, FSpanBuffer* Span);
+#ifdef UTGLR_ENGINE_HP2
+	void HP2DrawGouraudPolygon(FSceneNode* Frame, FTextureInfo& Info, FTransTexture** Pts, INT NumPts, DWORD PolyFlags, FSpanBuffer* Span);
+#else
 	void DrawGouraudPolygon(FSceneNode* Frame, FTextureInfo& Info, FTransTexture** Pts, INT NumPts, DWORD PolyFlags, FSpanBuffer* Span);
+#endif
 	void DrawTile(FSceneNode* Frame, FTextureInfo& Info, FLOAT X, FLOAT Y, FLOAT XL, FLOAT YL, FLOAT U, FLOAT V, FLOAT UL, FLOAT VL, class FSpanBuffer* Span, FLOAT Z, FPlane Color, FPlane Fog, DWORD PolyFlags);
 	void Draw3DLine(FSceneNode* Frame, FPlane Color, DWORD LineFlags, FVector P1, FVector P2);
 	void Draw2DLine(FSceneNode* Frame, FPlane Color, DWORD LineFlags, FVector P1, FVector P2);

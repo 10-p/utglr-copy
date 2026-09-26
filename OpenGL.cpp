@@ -3804,7 +3804,11 @@ void UOpenGLRenderDevice::Flush(UBOOL AllowPrecache) {
 }
 
 
+#ifdef UTGLR_ENGINE_HP2
+void UOpenGLRenderDevice::DrawComplexSurface(FSceneNode* Frame, FSurfaceInfo& Surface, FSurfaceFacet& Facet, DWORD InPolyFlags, BYTE cAlpha) {
+#else
 void UOpenGLRenderDevice::DrawComplexSurface(FSceneNode* Frame, FSurfaceInfo& Surface, FSurfaceFacet& Facet) {
+#endif
 	UTGLR_DEBUG_CALL_COUNT(DrawComplexSurface);
 	guard(UOpenGLRenderDevice::DrawComplexSurface);
 
@@ -3856,6 +3860,32 @@ void UOpenGLRenderDevice::DrawComplexSurface(FSceneNode* Frame, FSurfaceInfo& Su
 		return;
 	}
 
+#ifdef UTGLR_ENGINE_HP2
+	// 433: draw with the flags ARGUMENT, never Surface.PolyFlags — for Lumos surfaces Render passes a modified
+	// copy (PF_Occlude added/removed). cAlpha is TRANSPARENCY (255 = gone) and means something only on Lumos
+	// surfaces; every other surface arrives with 255 (Render/Src/UnRender.cpp, the Lumos block).
+	DWORD PolyFlags = InPolyFlags & ~PF_AlphaBlend;
+	m_hp2SurfOpacity = 1.0f;
+	if (!GIsEditor && (PolyFlags & PF_HighShadowDetail) && (PolyFlags & (PF_Modulated | PF_Translucent))) {
+		// Lumos surface. Retail D3D7 (D3DDrv/Src/Direct3D7.cpp SetBlending) blends PF_LumosAffected surfaces
+		// out = src*(1-a) + dst*a with a = texA*cAlpha/255; here: straight alpha with opacity 1 - cAlpha/255.
+		// On 433 PF_Modulated/PF_HighShadowDetail only select that blend and PF_Gouraud (LumosAppear) /
+		// PF_DirtyShadows (LumosAlwaysOn) are markers: strip them so the base x lightmap texturing is the
+		// normal one. Requiring PF_HighShadowDetail AND a blend bit keeps plain PF_Modulated polys (blob
+		// shadows) on the classic modulate blend — D3D7's '&' test would make them vanish (renderer-forks §3.3).
+		// Depth writes follow the PF_Occlude Render decided.
+		PolyFlags &= ~(PF_Modulated | PF_Translucent | PF_HighShadowDetail | PF_Gouraud | PF_DirtyShadows);
+		if ((cAlpha == 255) && !(PolyFlags & PF_Occlude)) {
+			//Fully faded and not occluding: nothing reaches the frame or depth buffer
+			return;
+		}
+		if (cAlpha != 0) {
+			m_hp2SurfOpacity = (255 - cAlpha) / 255.0f;
+			PolyFlags |= PF_AlphaBlend;
+		}
+	}
+#endif
+
 	clock(ComplexCycles);
 
 	//Calculate UDot and VDot intermediates for complex surface
@@ -3888,6 +3918,12 @@ void UOpenGLRenderDevice::DrawComplexSurface(FSceneNode* Frame, FSurfaceInfo& Su
 	if ((DetailTextures != 0) && Surface.DetailTexture && !Surface.FogMap) {
 		drawDetailTexture = true;
 	}
+#ifdef UTGLR_ENGINE_HP2
+	//A see-through Lumos surface gets no detail pass: its modulated overlay would darken what shows through
+	if (PolyFlags & PF_AlphaBlend) {
+		drawDetailTexture = false;
+	}
+#endif
 
 	//Check for detail texture
 	if (drawDetailTexture == true) {
@@ -3903,7 +3939,9 @@ void UOpenGLRenderDevice::DrawComplexSurface(FSceneNode* Frame, FSurfaceInfo& Su
 	}
 
 
+#ifndef UTGLR_ENGINE_HP2
 	DWORD PolyFlags = Surface.PolyFlags;
+#endif
 
 	//Initialize render passes state information
 	m_rpPassCount = 0;
@@ -4230,7 +4268,12 @@ void UOpenGLRenderDevice::DrawGouraudPolygonOld(FSceneNode* Frame, FTextureInfo&
 	unguard;
 }
 
+#ifdef UTGLR_ENGINE_HP2
+//433: not an override (see OpenGL.h) — the buffered gouraud path DrawTriangles feeds, one polygon at a time
+void UOpenGLRenderDevice::HP2DrawGouraudPolygon(FSceneNode* Frame, FTextureInfo& Info, FTransTexture** Pts, INT NumPts, DWORD PolyFlags, FSpanBuffer* Span) {
+#else
 void UOpenGLRenderDevice::DrawGouraudPolygon(FSceneNode* Frame, FTextureInfo& Info, FTransTexture** Pts, INT NumPts, DWORD PolyFlags, FSpanBuffer* Span) {
+#endif
 	UTGLR_DEBUG_CALL_COUNT(DrawGouraudPolygon);
 	guard(UOpenGLRenderDevice::DrawGouraudPolygon);
 
@@ -4411,6 +4454,78 @@ void UOpenGLRenderDevice::DrawGouraudPolygon(FSceneNode* Frame, FTextureInfo& In
 
 	unguard;
 }
+
+#ifdef UTGLR_ENGINE_HP2
+// 433 blend semantics UT v400/v436 never had (retail D3D7 SetBlending, D3DDrv/Src/Direct3D7.cpp; SoftDrv
+// DrawPoly.cpp DrawTriangles): PF_Highlighted|PF_Translucent is STRAIGHT alpha with the opacity per vertex in
+// Light.W (actors fading out, Render/Src/UnMeshRnLOD.h: Opacity < 1). A masked texture drops the pair and
+// draws masked, as SoftDrv does. Mapped onto upstream's PF_AlphaBlend here, before SetBlend's "PF_Translucent
+// first" order could turn a fading actor into an additive ghost. Also strips the synthetic bit from content.
+DWORD FASTCALL UOpenGLRenderDevice::HP2AdjustPolyFlags(DWORD PolyFlags) {
+	PolyFlags &= ~PF_AlphaBlend;
+	if ((PolyFlags & (PF_Highlighted | PF_Translucent)) == (PF_Highlighted | PF_Translucent)) {
+		PolyFlags &= ~(PF_Highlighted | PF_Translucent);
+		if (!(PolyFlags & PF_Masked)) {
+			PolyFlags |= PF_AlphaBlend;
+		}
+	}
+	return PolyFlags;
+}
+
+INT UOpenGLRenderDevice::MaxVertices() {
+	// = retail D3D7 (ACTORPOLY_VERTEX_MAX) and SoftDrv, on every HP2 device: the mesh batcher and the particle
+	// renderer size their vertex/index buffers from it once (Render/Src/UnMeshRn.cpp, UnParticleRn.cpp).
+	// UTGLR's VERTEX_ARRAY_SIZE bounds one flush, not one call, so any value <= 65535 would do.
+	return 256;
+}
+
+void UOpenGLRenderDevice::DrawTriangles(FSceneNode* Frame, FTextureInfo& Info, FTransTexture** Pts, INT NumPts, _WORD* Indices, INT NumIndices, DWORD PolyFlags, FSpanBuffer* Span) {
+	UTGLR_DEBUG_CALL_COUNT(DrawTriangles);
+	guard(UOpenGLRenderDevice::DrawTriangles);
+
+	if (NumPts < 3) {
+		return;
+	}
+
+	PolyFlags = HP2AdjustPolyFlags(PolyFlags);
+
+	// Three input shapes, exactly as retail D3D7 DrawTriangles (Indices ? indexed list : NumIndices == NumPts ?
+	// fan : list). Every triangle goes through UTGLR's buffered 3-vertex gouraud path, batched by
+	// (PolyFlags, texture) like v436 mesh triangles, so hit-select, the GUglyHackFlags near-Z range hack
+	// (first-person overlay meshes), masked-texture cache ids and vertex fog all keep working.
+	if (Indices) {
+		// Indexed triangle list: every mesh (vertex, LOD and CPU-skinned skeletal, via the Render mesh batcher)
+		// and every particle system. Pts may hold vertices no index references (particles), so only the
+		// indexed ones are read; an out-of-range index drops its triangle instead of reading past Pts.
+		FTransTexture* Tri[3];
+		for (INT i = 0; i + 3 <= NumIndices; i += 3) {
+			const INT I0 = Indices[i + 0];
+			const INT I1 = Indices[i + 1];
+			const INT I2 = Indices[i + 2];
+			if ((I0 >= NumPts) || (I1 >= NumPts) || (I2 >= NumPts)) {
+				continue;
+			}
+			Tri[0] = Pts[I0];
+			Tri[1] = Pts[I1];
+			Tri[2] = Pts[I2];
+			HP2DrawGouraudPolygon(Frame, Info, Tri, 3, PolyFlags, Span);
+		}
+	}
+	else if (NumIndices == NumPts) {
+		// One convex polygon drawn as a fan: BSP decals incl. actor blob shadows (Render/Src/UnRender.cpp) and
+		// the base URenderDevice::DrawGouraudPolygon forwarder (Engine/Src/UnCamera.cpp).
+		HP2DrawGouraudPolygon(Frame, Info, Pts, NumPts, PolyFlags, Span);
+	}
+	else {
+		// Plain non-indexed triangle list of NumPts vertices (no 433 caller compiles it; kept for the contract).
+		for (INT v = 0; v + 3 <= NumPts; v += 3) {
+			HP2DrawGouraudPolygon(Frame, Info, &Pts[v], 3, PolyFlags, Span);
+		}
+	}
+
+	unguard;
+}
+#endif
 
 void UOpenGLRenderDevice::DrawTile(FSceneNode* Frame, FTextureInfo& Info, FLOAT X, FLOAT Y, FLOAT XL, FLOAT YL, FLOAT U, FLOAT V, FLOAT UL, FLOAT VL, class FSpanBuffer* Span, FLOAT Z, FPlane Color, FPlane Fog, DWORD PolyFlags) {
 	UTGLR_DEBUG_CALL_COUNT(DrawTile);
