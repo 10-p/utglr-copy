@@ -4562,6 +4562,11 @@ void UOpenGLRenderDevice::DrawTile(FSceneNode* Frame, FTextureInfo& Info, FLOAT 
 	//DrawTile does not use PolyFlags2
 	const DWORD PolyFlags2 = 0;
 
+#ifdef UTGLR_ENGINE_HP2
+	//hp2: tiles take the v436 path; never let a stray content bit select the synthetic straight-alpha mode
+	PolyFlags &= ~PF_AlphaBlend;
+#endif
+
 	EndGouraudPolygonBuffering();
 
 	if (SceneNodeHack) {
@@ -4677,7 +4682,13 @@ void UOpenGLRenderDevice::DrawTile(FSceneNode* Frame, FTextureInfo& Info, FLOAT 
 #else
 			if (Info.Palette && Info.Palette[128].A != 255 && !(PolyFlags & PF_Translucent)) {
 #endif
+#ifdef UTGLR_ENGINE_HP2
+				//hp2 (retail D3D7 433 DrawTile + AdjustPolyFlags): an alpha-palette tile is premultiplied
+				//PF_Highlighted WITHOUT PF_Occlude, so its transparent texels write no depth (world sprites)
+				PolyFlags |= PF_Highlighted;
+#else
 				PolyFlags |= PF_Highlighted | PF_Occlude;
+#endif
 			}
 
 			//Set default texture state
@@ -4828,7 +4839,12 @@ void UOpenGLRenderDevice::DrawTile(FSceneNode* Frame, FTextureInfo& Info, FLOAT 
 #else
 		if (Info.Palette && Info.Palette[128].A != 255 && !(PolyFlags & PF_Translucent)) {
 #endif
+#ifdef UTGLR_ENGINE_HP2
+			//hp2: premultiplied PF_Highlighted without PF_Occlude (see the buffered path above)
+			PolyFlags |= PF_Highlighted;
+#else
 			PolyFlags |= PF_Highlighted | PF_Occlude;
+#endif
 		}
 
 		SetBlend(PolyFlags);
