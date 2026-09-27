@@ -422,7 +422,7 @@ class UOpenGLRenderDevice : public URenderDevice {
 
 
 	inline void * FASTCALL AlignMemPtr(void *ptr, DWORD align) {
-		return (void *)(((DWORD)ptr + (align - 1)) & -align);
+		return (void *)(((UPTRINT)ptr + (align - 1)) & ~(UPTRINT)(align - 1));
 	}
 	enum { VERTEX_ARRAY_ALIGN = 64 };	//Must be even multiple of 16B for SSE
 	enum { VERTEX_ARRAY_TAIL_PADDING = 72 };	//Must include 8B for half SSE tail
