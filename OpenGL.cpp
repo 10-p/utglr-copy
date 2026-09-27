@@ -5359,7 +5359,7 @@ void UOpenGLRenderDevice::ScanForOldTextures(void) {
 				m_nonZeroPrefixBindChain->unlink(pCT);
 
 				//Get pointer to node in bind map
-				QWORD_CTTree_t::node_t *pNode = (QWORD_CTTree_t::node_t *)((BYTE *)pCT - (DWORD)&(((QWORD_CTTree_t::node_t *)0)->data));
+				QWORD_CTTree_t::node_t *pNode = (QWORD_CTTree_t::node_t *)((BYTE *)pCT - (UPTRINT)&(((QWORD_CTTree_t::node_t *)0)->data));
 				//Extract tree index
 				BYTE treeIndex = pCT->treeIndex;
 				//Advanced cached texture pointer to next entry in linked list
@@ -5391,7 +5391,7 @@ void UOpenGLRenderDevice::ScanForOldTextures(void) {
 				TexPoolMapKey_t texPoolKey = MakeTexPoolMapKey(pCT->UBits, pCT->VBits);
 
 				//Get pointer to node in bind map
-				QWORD_CTTree_t::node_t *pNode = (QWORD_CTTree_t::node_t *)((BYTE *)pCT - (DWORD)&(((QWORD_CTTree_t::node_t *)0)->data));
+				QWORD_CTTree_t::node_t *pNode = (QWORD_CTTree_t::node_t *)((BYTE *)pCT - (UPTRINT)&(((QWORD_CTTree_t::node_t *)0)->data));
 				//Extract tree index
 				BYTE treeIndex = pCT->treeIndex;
 				//Advanced cached texture pointer to next entry in linked list
