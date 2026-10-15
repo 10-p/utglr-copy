@@ -72,6 +72,9 @@ TODO:
 // at Emscripten's context-aware resolver instead of SDL's. See the set_getprocaddress call in Init.
 #include <emscripten/html5_webgl.h>
 #endif
+#ifdef __EMSCRIPTEN__
+extern "C" int ufront_backbuffer_samples(int Samples); // the engine's msaa-backbuffer.js (ufront 2.92)
+#endif
 
 #ifdef _WIN32
 #include <mmsystem.h>
@@ -1968,6 +1971,19 @@ UBOOL UOpenGLRenderDevice::SetRes(INT NewX, INT NewY, INT NewColorBytes, UBOOL F
 
 	// Change window size.
 	Viewport->ResizeViewport(Fullscreen ? (BLIT_Fullscreen | BLIT_OpenGL) : (BLIT_HardwarePaint | BLIT_OpenGL), NewX, NewY, NewColorBytes);
+
+#ifdef __EMSCRIPTEN__
+	// ufront 2.92: antialiasing on the web is the engine's multisampled emulated back buffer (msaa-backbuffer.js,
+	// WebGL 2 only): UseAA asks for NumAASamples, otherwise it is given back (the context outlives a device).
+	// m_usingAA stays false: it selects alpha-to-coverage for masked textures and toggles GL_MULTISAMPLE, which
+	// gl4es's fixed-function emulation only records, so masked textures keep their alpha blend.
+	{
+		const INT Got = ufront_backbuffer_samples(UseAA ? NumAASamples : 0);
+		if (Got > 1) debugf(NAME_Init, TEXT("AA: %ix multisampled back buffer"), Got);
+		else if (UseAA) debugf(NAME_Init, TEXT("AA: unavailable on this context (WebGL 1)"));
+		else debugf(NAME_Init, TEXT("AA: off"));
+	}
+#endif
 #else
 	debugf(TEXT("Enter SetRes()"));
 
