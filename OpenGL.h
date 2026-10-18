@@ -34,7 +34,7 @@
 #include <stdio.h>
 #include <stdarg.h>
 #ifndef __UNIX__
-#include <tchar.h>	// engine-ut99: Linux/gcc has no <tchar.h>; the two _T() literals are TEXT() instead
+#include <tchar.h>
 #endif
 
 
@@ -51,9 +51,8 @@
 #include "c_gclip.h"
 
 
-// ufront 2.34: these two blocks are MSVC syntax, not Windows syntax — `__asm { mov eax, ... }` (Intel
-// blocks) and `__try/__except` (SEH). MinGW GCC accepts neither, so the gate has to say _MSC_VER. Every
-// use site already has a portable C fallback: it is what the Linux build has always compiled.
+// The inline assembly (`__asm { ... }`) and SEH (`__try/__except`) blocks are MSVC syntax; other
+// compilers, MinGW GCC included, use the portable C paths.
 #if defined(_WIN32) && defined(_MSC_VER)
 
 //Optional ASM code
@@ -360,8 +359,8 @@ typedef struct {
 //
 class UOpenGLRenderDevice : public URenderDevice {
 #if defined UTGLR_DX_BUILD || defined UTGLR_ENGINE_UT99DC
-	// engine-ut99 (ut99dc / UE1 v400): DECLARE_CLASS is the 3-arg form; the package is
-	// supplied by IMPLEMENT_PACKAGE(OpenGLDrv)/THIS_PACKAGE, not the retail-v436 4-arg macro.
+	// UE1 v400 has the 3-argument DECLARE_CLASS; the package comes from IMPLEMENT_PACKAGE /
+	// THIS_PACKAGE.
 	DECLARE_CLASS(UOpenGLRenderDevice, URenderDevice, CLASS_Config)
 #else
 	DECLARE_CLASS(UOpenGLRenderDevice, URenderDevice, CLASS_Config, OpenGLDrv)
@@ -638,8 +637,7 @@ class UOpenGLRenderDevice : public URenderDevice {
 	INT SwapInterval;
 	INT FrameRateLimit;
 #if defined UTGLR_DX_BUILD || defined UTGLR_RUNE_BUILD || defined UTGLR_ENGINE_UT99DC
-	// engine-ut99 (ut99dc / UE1 v400) has no FTime type; the frame-rate limiter stores
-	// appSeconds() (DOUBLE) here, so FLOAT is sufficient and keeps the type present.
+	// UE1 v400 has no FTime; the frame-rate limiter stores appSeconds() here.
 	FLOAT m_prevFrameTimestamp;
 #else
 	FTime m_prevFrameTimestamp;

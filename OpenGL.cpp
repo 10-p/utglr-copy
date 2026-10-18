@@ -49,13 +49,8 @@ TODO:
 
 =============================================================================*/
 
-// engine-ut99: front-load the C++ STL headers UTGLR pulls from OpenGL.h (<new>/<map>/<vector>) BEFORE
-// Core's headers (via OpenGLDrv.h). Two reasons, both order-sensitive:
-//  1. <new> first => Core's inline operator delete matches <new>'s noexcept spec (C++11+); mirrors
-//     NOpenGLESDrv's glm-before-engine order. Otherwise: "different exception specifier" error.
-//  2. <map> pulls <time.h> (on Emscripten's libc++) => time.h's `clock_t clock(void)` is seen before
-//     Core/UnFile.h defines its `#define clock(Timer)` timing macro, which would otherwise mangle it.
-// OpenGL.h re-includes these (guarded no-op), so nothing changes for the native build.
+// The standard headers OpenGL.h uses come before Core's: <new> first, so Core's inline operator delete
+// matches its exception specification, and <map> pulls in <time.h> before UnFile.h's clock(Timer) macro.
 #include <new>
 #include <map>
 #include <vector>
@@ -64,16 +59,15 @@ TODO:
 #include "OpenGL.h"
 
 #ifdef UTGLR_USE_GL4ES
-#include "gl4esinit.h"	// engine-ut99: gl4es (desktop GL -> GLES2) init + wrapped proc-address API
+#include "gl4esinit.h"	// gl4es (desktop GL -> GLES 2): initialisation and its proc-address API
 #endif
 
 #if defined(__EMSCRIPTEN__) && defined(__EMSCRIPTEN_PTHREADS__)
-// ufront 2.13.2 — the engine runs on a worker whose WebGL context SDL does not own, so gl4es is pointed
-// at Emscripten's context-aware resolver instead of SDL's. See the set_getprocaddress call in Init.
+// On a threaded web build SDL does not own the worker's WebGL context; gl4es uses Emscripten's resolver.
 #include <emscripten/html5_webgl.h>
 #endif
 #ifdef __EMSCRIPTEN__
-extern "C" int ufront_backbuffer_samples(int Samples); // the engine's msaa-backbuffer.js (ufront 2.92)
+extern "C" int ufront_backbuffer_samples(int Samples); // provided by the engine's msaa-backbuffer.js
 #endif
 
 #ifdef _WIN32
@@ -1747,8 +1741,7 @@ bool UOpenGLRenderDevice::GetGL1Proc(void*& ProcAddress, const char *pName) {
 	guard(UOpenGLRenderDevice::GetGL1Proc);
 
 #ifdef UTGLR_USE_GL4ES
-	// engine-ut99: resolve GL entry points through gl4es' own wrapper so calls hit the translation
-	// layer (desktop GL -> GLES2), NOT the system GL that SDL_GL_GetProcAddress would return.
+	// Entry points come from gl4es, so calls go through its translation layer, not the system GL.
 	ProcAddress = (void *)gl4es_GetProcAddress(pName);
 #elif defined UTGLR_USE_SDL
 	ProcAddress = (void *)SDL_GL_GetProcAddress(pName);
@@ -1803,7 +1796,7 @@ void UOpenGLRenderDevice::GetGLExtProc(void*& ProcAddress, const char *pName, co
 	}
 
 #ifdef UTGLR_USE_GL4ES
-	ProcAddress = (void *)gl4es_GetProcAddress(pName);	// engine-ut99: via gl4es (see GetGL1Proc)
+	ProcAddress = (void *)gl4es_GetProcAddress(pName);	// through gl4es's translation layer
 #elif defined UTGLR_USE_SDL
 	ProcAddress = (void *)SDL_GL_GetProcAddress(pName);
 #else
@@ -1973,10 +1966,10 @@ UBOOL UOpenGLRenderDevice::SetRes(INT NewX, INT NewY, INT NewColorBytes, UBOOL F
 	Viewport->ResizeViewport(Fullscreen ? (BLIT_Fullscreen | BLIT_OpenGL) : (BLIT_HardwarePaint | BLIT_OpenGL), NewX, NewY, NewColorBytes);
 
 #ifdef __EMSCRIPTEN__
-	// ufront 2.92: antialiasing on the web is the engine's multisampled emulated back buffer (msaa-backbuffer.js,
-	// WebGL 2 only): UseAA asks for NumAASamples, otherwise it is given back (the context outlives a device).
-	// m_usingAA stays false: it selects alpha-to-coverage for masked textures and toggles GL_MULTISAMPLE, which
-	// gl4es's fixed-function emulation only records, so masked textures keep their alpha blend.
+	// Antialiasing on the web is the engine's multisampled emulated back buffer (WebGL 2 only): UseAA asks
+	// for NumAASamples, otherwise the single-sample buffer is restored (the context outlives a device).
+	// m_usingAA stays false: its alpha-to-coverage and GL_MULTISAMPLE switches are only recorded by gl4es,
+	// so masked textures keep their alpha blend.
 	{
 		const INT Got = ufront_backbuffer_samples(UseAA ? NumAASamples : 0);
 		if (Got > 1) debugf(NAME_Init, TEXT("AA: %ix multisampled back buffer"), Got);
@@ -2253,12 +2246,9 @@ UBOOL UOpenGLRenderDevice::SetRes(INT NewX, INT NewY, INT NewColorBytes, UBOOL F
 	UseVertexSpecular = 1;
 
 #ifdef UTGLR_ENGINE_UT99DC
-	// engine-ut99: UTGLR's UseS3TC config member does not reliably carry its compiled default (1) to
-	// the render-device instance in this engine (the per-param bit-offset trick + CDO/config-load
-	// interaction leaves it 0). Read it straight from the ini with a default of ON, so DXT1/S3TC
-	// textures are used whenever the GPU supports the extensions — otherwise the ENGINE silently
-	// decompresses TEXF_DXT1 to RGBA7 before the driver ever sees it (SupportsTC is engine-visible).
-	// Users can still disable it with [OpenGLDrv.OpenGLRenderDevice] UseS3TC=False.
+	// The UseS3TC config bit does not receive its default (1) on this engine, so it is read from the ini
+	// with a default of on; with it off the engine converts DXT1 to RGBA7 before the driver sees it
+	// (SupportsTC). [OpenGLDrv.OpenGLRenderDevice] UseS3TC=False turns it off.
 	{ UBOOL cfgUseS3TC = 1; GConfig->GetBool(g_pSection, TEXT("UseS3TC"), cfgUseS3TC); UseS3TC = cfgUseS3TC; }
 #endif
 
@@ -2935,11 +2925,8 @@ UBOOL UOpenGLRenderDevice::Init(UViewport* InViewport, INT NewX, INT NewY, INT N
 	debugf(TEXT("Initializing OpenGLDrv..."));
 
 #ifdef __EMSCRIPTEN__
-	// ufront (2.12): the base feature flags + DetailMax now arrive via the shared LoadConfig() in
-	// UNSDLClient::TryRenderDevice (see NSDLClient.cpp) reading [OpenGLDrv.OpenGLRenderDevice]. SupportsFogMaps
-	// is NOT a config prop (a driver capability set only in StaticConstructor, so also 0 on the zero-init web
-	// instance) -> set it here like XOpenGL's Init does, else the engine's fog-map generation gate
-	// (VolumetricLighting && SupportsFogMaps && bFogZone) fails and zone fog is absent.
+	// SupportsFogMaps is a capability, not a config property, so the zero-initialised web render device
+	// starts without it; the engine generates zone fog maps only when it is set.
 	SupportsFogMaps = 1;
 #endif
 
@@ -2954,24 +2941,17 @@ UBOOL UOpenGLRenderDevice::Init(UViewport* InViewport, INT NewX, INT NewY, INT N
 		bool loadRet;
 
 #ifdef UTGLR_ENGINE_UT99DC
-		// engine-ut99: NSDLDrv creates the SDL window + GL context (and thus loads the GL library)
-		// BEFORE the render device's Init runs, and makes it current. SDL_GL_GetProcAddress already
-		// resolves against it, so do NOT call SDL_GL_LoadLibrary here — SDL reports "OpenGL library
-		// already loaded" and UTGLR treats that as fatal. Matches NOpenGLESDrv, which never loads a
-		// GL library itself.
+		// NSDLDrv has already created the window and the GL context (loading the GL library) and made it
+		// current; SDL_GL_LoadLibrary would fail with "OpenGL library already loaded".
 #ifdef UTGLR_USE_GL4ES
-		// gl4es backend (WebGL path): hand gl4es SDL's loader so it can reach the underlying GLES2
-		// driver, then initialize it (built with NO_INIT_CONSTRUCTOR). GL entry points are then resolved
-		// via gl4es_GetProcAddress (GetGL1Proc/GetGLExtProc), so they hit gl4es' translation layer.
+		// gl4es back end: give gl4es the loader of the underlying GLES driver and initialise it (it is
+		// built with NO_INIT_CONSTRUCTOR); GetGL1Proc and GetGLExtProc then resolve through gl4es.
 		setenv("LIBGL_ES", "2", 1);       // target GLES2
 		setenv("LIBGL_NOBANNER", "1", 1); // no gl4es banner on stdout
 		setenv("LIBGL_USEVBO", "0", 1);   // UTGLR feeds client-side vertex arrays
 #if defined(__EMSCRIPTEN__) && defined(__EMSCRIPTEN_PTHREADS__)
-		// ufront 2.13.2: on a threaded web build the engine runs on a worker and NSDLViewport creates the
-		// WebGL context directly with emscripten_webgl_create_context (SDL's EGL path is unusable there —
-		// Emscripten #24792). SDL therefore owns no context and SDL_GL_GetProcAddress resolves against
-		// nothing, so gl4es would get a null backend and every translated call would go nowhere.
-		// Emscripten's resolver is context-aware and works on the worker.
+		// On a threaded web build NSDLViewport creates the WebGL context on the worker (SDL's EGL path does
+		// not work there, Emscripten issue 24792), so SDL resolves no entry points; Emscripten's resolver does.
 		set_getprocaddress((void*(*)(const char*))emscripten_webgl_get_proc_address);
 #else
 		set_getprocaddress((void*(*)(const char*))SDL_GL_GetProcAddress);
@@ -3717,7 +3697,7 @@ void UOpenGLRenderDevice::Unlock(UBOOL Blit) {
 	//Check for optional frame rate limit
 	if (FrameRateLimit >= 20) {
 #if defined UTGLR_DX_BUILD || defined UTGLR_RUNE_BUILD || defined UTGLR_ENGINE_UT99DC
-		FLOAT curFrameTimestamp;	// engine-ut99: no FTime type (see OpenGL.h)
+		FLOAT curFrameTimestamp;	// v400 has no FTime
 #else
 		FTime curFrameTimestamp;
 #endif
@@ -4432,11 +4412,8 @@ void UOpenGLRenderDevice::DrawTile(FSceneNode* Frame, FTextureInfo& Info, FLOAT 
 	UTGLR_DEBUG_CALL_COUNT(DrawTile);
 	guard(UOpenGLRenderDevice::DrawTile);
 
-	// 2.12 (web): HUD/menu/font/cursor tiles arrive at Z==1 (2D screen-space overlays). UTGLR depth-tests
-	// tiles and relies on its ZRangeHack to sort them on top, but on the web/gl4es path the 3D scene behind
-	// a menu can depth-cull them — the UWindow mouse cursor vanished under UTGLR while XOpenGL (disables
-	// depth for HUD tiles) and SoftDrv (no depth) drew it. Draw 2D-overlay tiles (incoming Z==1) with
-	// depth-test off so they always land on top. Native UTGLR keeps its existing behavior (#ifdef guard).
+	// 2D overlay tiles (HUD, menus, fonts, the cursor) arrive at Z == 1. On the web (gl4es) the scene's
+	// depth can hide them despite the ZRangeHack, so there they draw with the depth test off.
 	const UBOOL bOverlayTile2D = (Z == 1.f);
 
 	//DrawTile does not use PolyFlags2
@@ -4459,7 +4436,7 @@ void UOpenGLRenderDevice::DrawTile(FSceneNode* Frame, FTextureInfo& Info, FLOAT 
 	}
 
 #ifdef __EMSCRIPTEN__
-	// See the 2D-overlay note above: draw screen-space overlay tiles with depth-test off (web/gl4es).
+	// 2D overlay tile: no depth test.
 	if (bOverlayTile2D) {
 		EndTileBuffering();
 		glDisable(GL_DEPTH_TEST);
@@ -4764,7 +4741,7 @@ void UOpenGLRenderDevice::DrawTile(FSceneNode* Frame, FTextureInfo& Info, FLOAT 
 	}
 
 #ifdef __EMSCRIPTEN__
-	// Restore depth-test after a 2D-overlay tile (see the note at the top of DrawTile).
+	// Restore the depth test after a 2D overlay tile.
 	if (bOverlayTile2D)
 		glEnable(GL_DEPTH_TEST);
 #endif
@@ -5968,7 +5945,7 @@ void UOpenGLRenderDevice::CacheTextureInfo(FCachedTexture *pBind, const FTexture
 	TCHAR dbgStr[1024];
 	TCHAR numStr[32];
 
-	dbgStr[0] = 0;	// engine-ut99: was _T('\0') (no <tchar.h> on Linux; ANSI TCHAR)
+	dbgStr[0] = 0;
 	appStrcat(dbgStr, TEXT("utglr: ZPBindTree Size = "));
 	for (u = 0; u < NUM_CTTree_TREES; u++) {
 		appSprintf(numStr, TEXT("%u"), m_zeroPrefixBindTrees[u].calc_size());
@@ -5977,7 +5954,7 @@ void UOpenGLRenderDevice::CacheTextureInfo(FCachedTexture *pBind, const FTexture
 	}
 	dbgPrintf("%s\n", appToAnsi(dbgStr));
 
-	dbgStr[0] = 0;	// engine-ut99: was _T('\0') (no <tchar.h> on Linux; ANSI TCHAR)
+	dbgStr[0] = 0;
 	appStrcat(dbgStr, TEXT("utglr: NZPBindTree Size = "));
 	for (u = 0; u < NUM_CTTree_TREES; u++) {
 		appSprintf(numStr, TEXT("%u"), m_nonZeroPrefixBindTrees[u].calc_size());
@@ -6550,13 +6527,9 @@ void UOpenGLRenderDevice::SetTexEnvNoCheck(DWORD texUnit, DWORD texEnvFlags) {
 			glTexEnvf(GL_TEXTURE_ENV, GL_RGB_SCALE_EXT, 1.0f);
 		}
 		else {
-			// ufront (2.12): gl4es/WebGL1 provides NEITHER ATI_texture_env_combine3 NOR
-			// NV_texture_env_combine4, so the vendor COMBINE modes above set an unsupported texenv and the
-			// fog pass produced no output (black fog). SinglePassFog is force-disabled without those
-			// extensions (ConfigValidate_RequiredExtensions), so fog is drawn as its OWN single-texture pass
-			// -> the fog color just needs to reach the framebuffer via the PF_Highlighted blend
-			// (GL_ONE, GL_ONE_MINUS_SRC_ALPHA); a plain MODULATE (fog texel * white primary) does that.
-			// Fixes UTGLR zone fog on the web (gl4es) path.
+			// Neither combine extension (gl4es): SinglePassFog is off without them
+			// (ConfigValidate_RequiredExtensions), so fog is its own single-texture pass and GL_MODULATE
+			// (fog texel x white) carries it to the PF_Highlighted blend (GL_ONE, GL_ONE_MINUS_SRC_ALPHA).
 			glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
 		}
 	}
