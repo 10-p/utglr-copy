@@ -29,16 +29,16 @@
 #undef UTGLR_VALID_BUILD_CONFIG
 
 
-// ufront (hp2): engine-face selection. Three macros, three meanings:
-//   UTGLR_ENGINE_UT99DC — the ufront PLATFORM layer (SDL2 shims, NSDLDrv-owned context, gl4es, web tweaks).
-//                         Defined by every ufront build: UT99 v400 and HP2 433 alike.
-//   UTGLR_ENGINE_V400   — derived: the ut99dc ENGINE TYPES (3-arg DECLARE_CLASS, no FTime). UT99 v400 only.
-//                         HP2 433 has upstream v436's types (4-arg DECLARE_CLASS, FTime), so it takes the
-//                         upstream UTGLR_UT_BUILD branches at those sites instead.
-//   UTGLR_ENGINE_HP2    — UE1 build 433 (Harry Potter 2): its render-device face (5-arg DrawComplexSurface
-//                         with Lumos cAlpha, MaxVertices, DrawTriangles) and its blend semantics.
-// UTGLR_HAS_ALPHABLEND is the feature macro for upstream's Rune/227 PF_AlphaBlend plumbing (straight alpha
-// blend, no additive fog pass), which HP2 reuses for its Highlighted|Translucent vertex-alpha mode and Lumos.
+// Engine selection:
+//   UTGLR_ENGINE_UT99DC: the SDL2 platform layer (SDL2 shims, NSDLDrv-owned context, gl4es, web paths);
+//                        defined for UT99 v400 and HP2 433.
+//   UTGLR_ENGINE_V400:   derived, UT99 v400 only: its engine types (3-argument DECLARE_CLASS, no FTime).
+//                        HP2 433 has v436's types and takes the UTGLR_UT_BUILD branches there.
+//   UTGLR_ENGINE_HP2:    UE1 build 433 (Harry Potter and the Chamber of Secrets): its render-device
+//                        interface (5-argument DrawComplexSurface with Lumos cAlpha, MaxVertices,
+//                        DrawTriangles) and its blend semantics.
+// UTGLR_HAS_ALPHABLEND enables the Rune/227 PF_AlphaBlend path (straight alpha, no additive fog pass),
+// which HP2 uses for its Highlighted|Translucent vertex-alpha mode and for Lumos.
 #if defined(UTGLR_ENGINE_UT99DC) && !defined(UTGLR_ENGINE_HP2)
 #define UTGLR_ENGINE_V400 1
 #endif
@@ -46,8 +46,8 @@
 #define UTGLR_HAS_ALPHABLEND 1
 #endif
 #if defined(UTGLR_ENGINE_HP2)
-// Synthetic, driver-internal: 0x20000000 is the one EPolyFlags bit build 433 leaves unassigned
-// (Engine/Inc/UnObj.h). Content never sets it; every HP2 entry point strips it from incoming flags.
+// Driver-internal: 0x20000000 is the one EPolyFlags bit build 433 leaves unassigned. Content never
+// sets it; every HP2 entry point strips it from incoming flags.
 #define PF_AlphaBlend 0x20000000
 #endif
 
@@ -57,7 +57,7 @@
 #include <stdio.h>
 #include <stdarg.h>
 #ifndef __UNIX__
-#include <tchar.h>	// engine-ut99: Linux/gcc has no <tchar.h>; the two _T() literals are TEXT() instead
+#include <tchar.h>
 #endif
 
 
@@ -74,9 +74,8 @@
 #include "c_gclip.h"
 
 
-// ufront 2.34: these two blocks are MSVC syntax, not Windows syntax — `__asm { mov eax, ... }` (Intel
-// blocks) and `__try/__except` (SEH). MinGW GCC accepts neither, so the gate has to say _MSC_VER. Every
-// use site already has a portable C fallback: it is what the Linux build has always compiled.
+// The inline assembly (`__asm { ... }`) and SEH (`__try/__except`) blocks are MSVC syntax; other
+// compilers, MinGW GCC included, use the portable C paths.
 #if defined(_WIN32) && defined(_MSC_VER)
 
 //Optional ASM code
@@ -383,11 +382,11 @@ typedef struct {
 //
 class UOpenGLRenderDevice : public URenderDevice {
 #if defined UTGLR_DX_BUILD || defined UTGLR_ENGINE_V400
-	// engine-ut99 (ut99dc / UE1 v400): DECLARE_CLASS is the 3-arg form; the package is
-	// supplied by IMPLEMENT_PACKAGE(OpenGLDrv)/THIS_PACKAGE, not the retail-v436 4-arg macro.
+	// UE1 v400 has the 3-argument DECLARE_CLASS; the package comes from IMPLEMENT_PACKAGE /
+	// THIS_PACKAGE.
 	DECLARE_CLASS(UOpenGLRenderDevice, URenderDevice, CLASS_Config)
 #else
-	// Upstream v436 — and HP2 433, whose DECLARE_CLASS is the same strict 4-arg macro.
+	// v436 and HP2 433: the 4-argument DECLARE_CLASS.
 	DECLARE_CLASS(UOpenGLRenderDevice, URenderDevice, CLASS_Config, OpenGLDrv)
 #endif
 
@@ -662,11 +661,10 @@ class UOpenGLRenderDevice : public URenderDevice {
 	INT SwapInterval;
 	INT FrameRateLimit;
 #if defined UTGLR_DX_BUILD || defined UTGLR_RUNE_BUILD || defined UTGLR_ENGINE_V400
-	// engine-ut99 (ut99dc / UE1 v400) has no FTime type; the frame-rate limiter stores
-	// appSeconds() (DOUBLE) here, so FLOAT is sufficient and keeps the type present.
+	// UE1 v400 has no FTime; the frame-rate limiter stores appSeconds() here.
 	FLOAT m_prevFrameTimestamp;
 #else
-	// Upstream v436 and HP2 433: appSeconds() returns FTime (FTime - FTime -> float).
+	// v436 and HP2 433: appSeconds() returns FTime (FTime - FTime -> float).
 	FTime m_prevFrameTimestamp;
 #endif
 	UBOOL SceneNodeHack;
@@ -785,9 +783,9 @@ class UOpenGLRenderDevice : public URenderDevice {
 	BYTE m_gpAlpha;
 	bool m_gpFogEnabled;
 #ifdef UTGLR_ENGINE_HP2
-	//hp2: opacity of the Lumos complex surface being drawn (1 - cAlpha/255), 1 for every other surface
+	//Opacity of the Lumos complex surface being drawn (1 - cAlpha/255), 1 for every other surface
 	FLOAT m_hp2SurfOpacity;
-	//hp2: the buffered gouraud batch is straight-alpha (PF_AlphaBlend) and takes its vertex alpha from Light.W
+	//The buffered gouraud batch is straight-alpha (PF_AlphaBlend) and takes its vertex alpha from Light.W
 	bool m_hp2VertexAlpha;
 #endif
 
@@ -1149,10 +1147,10 @@ class UOpenGLRenderDevice : public URenderDevice {
 	void Flush(UBOOL AllowPrecache);
 
 #ifdef UTGLR_ENGINE_HP2
-	// UE1 build 433 render-device face (HP2 Engine/Inc/UnRenDev.h): 5-arg DrawComplexSurface (the flags to
-	// draw with + Lumos transparency), MaxVertices, DrawTriangles. On 433 URenderDevice::DrawGouraudPolygon is
-	// a non-pure forwarder to DrawTriangles that drivers must NOT override, so UTGLR's buffered gouraud body
-	// lives on below as the non-virtual HP2DrawGouraudPolygon, fed by DrawTriangles.
+	// UE1 build 433 render-device interface: 5-argument DrawComplexSurface (the flags to draw with and the
+	// Lumos transparency), MaxVertices, DrawTriangles. On 433 URenderDevice::DrawGouraudPolygon forwards to
+	// DrawTriangles and is not overridden, so UTGLR's buffered gouraud body is the non-virtual
+	// HP2DrawGouraudPolygon below, fed by DrawTriangles.
 	void DrawComplexSurface(FSceneNode* Frame, FSurfaceInfo& Surface, FSurfaceFacet& Facet, DWORD PolyFlags, BYTE cAlpha);
 	INT MaxVertices();
 	void DrawTriangles(FSceneNode* Frame, FTextureInfo& Info, FTransTexture** Pts, INT NumPts, _WORD* Indices, INT NumIndices, DWORD PolyFlags, FSpanBuffer* Span);
@@ -1334,9 +1332,9 @@ class UOpenGLRenderDevice : public URenderDevice {
 		}
 		else
 #elif defined(UTGLR_ENGINE_HP2)
-		//hp2: straight alpha (vertex-alpha actors, Lumos surfaces) never gains PF_Occlude here: depth writes
-		//follow the incoming flags (Render decided them for Lumos; D3D7 433 AdjustPolyFlags gives blended
-		//polys no Occlude). Alpha blending already hides masked-out texels.
+		//Straight alpha (vertex-alpha actors, Lumos surfaces) never gains PF_Occlude here: depth writes follow
+		//the incoming flags (Render chose them for Lumos; HP2's D3D7 driver gives blended polys no Occlude).
+		//Alpha blending already hides masked-out texels.
 		if (PolyFlags & PF_AlphaBlend) {
 			PolyFlags &= ~PF_Masked;
 		}

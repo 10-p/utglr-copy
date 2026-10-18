@@ -49,13 +49,8 @@ TODO:
 
 =============================================================================*/
 
-// engine-ut99: front-load the C++ STL headers UTGLR pulls from OpenGL.h (<new>/<map>/<vector>) BEFORE
-// Core's headers (via OpenGLDrv.h). Two reasons, both order-sensitive:
-//  1. <new> first => Core's inline operator delete matches <new>'s noexcept spec (C++11+); mirrors
-//     NOpenGLESDrv's glm-before-engine order. Otherwise: "different exception specifier" error.
-//  2. <map> pulls <time.h> (on Emscripten's libc++) => time.h's `clock_t clock(void)` is seen before
-//     Core/UnFile.h defines its `#define clock(Timer)` timing macro, which would otherwise mangle it.
-// OpenGL.h re-includes these (guarded no-op), so nothing changes for the native build.
+// The standard headers OpenGL.h uses come before Core's: <new> first, so Core's inline operator delete
+// matches its exception specification, and <map> pulls in <time.h> before UnFile.h's clock(Timer) macro.
 #include <new>
 #include <map>
 #include <vector>
@@ -64,16 +59,15 @@ TODO:
 #include "OpenGL.h"
 
 #ifdef UTGLR_USE_GL4ES
-#include "gl4esinit.h"	// engine-ut99: gl4es (desktop GL -> GLES2) init + wrapped proc-address API
+#include "gl4esinit.h"	// gl4es (desktop GL -> GLES 2): initialisation and its proc-address API
 #endif
 
 #if defined(__EMSCRIPTEN__) && defined(__EMSCRIPTEN_PTHREADS__)
-// ufront 2.13.2 — the engine runs on a worker whose WebGL context SDL does not own, so gl4es is pointed
-// at Emscripten's context-aware resolver instead of SDL's. See the set_getprocaddress call in Init.
+// On a threaded web build SDL does not own the worker's WebGL context; gl4es uses Emscripten's resolver.
 #include <emscripten/html5_webgl.h>
 #endif
 #ifdef __EMSCRIPTEN__
-extern "C" int ufront_backbuffer_samples(int Samples); // the engine's msaa-backbuffer.js (ufront 2.92)
+extern "C" int ufront_backbuffer_samples(int Samples); // provided by the engine's msaa-backbuffer.js
 #endif
 
 #ifdef _WIN32
@@ -1087,7 +1081,7 @@ static void FASTCALL Buffer3Verts(UOpenGLRenderDevice *pRD, FTransTexture** Pts)
 #ifdef UTGLR_RUNE_BUILD
 			pSingleColorArray->color = UOpenGLRenderDevice::FPlaneTo_RGB_Aub(&P->Light, pRD->m_gpAlpha);
 #elif defined(UTGLR_ENGINE_HP2)
-			//hp2: straight-alpha polys carry their opacity per vertex in Light.W (Render/Src/UnMeshRnLOD.h)
+			//Straight-alpha polys carry their opacity per vertex in Light.W
 			pSingleColorArray->color = pRD->m_hp2VertexAlpha ? UOpenGLRenderDevice::FPlaneTo_RGBA(&P->Light) : UOpenGLRenderDevice::FPlaneTo_RGB_A255(&P->Light);
 #else
 			pSingleColorArray->color = UOpenGLRenderDevice::FPlaneTo_RGB_A255(&P->Light);
@@ -1752,8 +1746,7 @@ bool UOpenGLRenderDevice::GetGL1Proc(void*& ProcAddress, const char *pName) {
 	guard(UOpenGLRenderDevice::GetGL1Proc);
 
 #ifdef UTGLR_USE_GL4ES
-	// engine-ut99: resolve GL entry points through gl4es' own wrapper so calls hit the translation
-	// layer (desktop GL -> GLES2), NOT the system GL that SDL_GL_GetProcAddress would return.
+	// Entry points come from gl4es, so calls go through its translation layer, not the system GL.
 	ProcAddress = (void *)gl4es_GetProcAddress(pName);
 #elif defined UTGLR_USE_SDL
 	ProcAddress = (void *)SDL_GL_GetProcAddress(pName);
@@ -1808,7 +1801,7 @@ void UOpenGLRenderDevice::GetGLExtProc(void*& ProcAddress, const char *pName, co
 	}
 
 #ifdef UTGLR_USE_GL4ES
-	ProcAddress = (void *)gl4es_GetProcAddress(pName);	// engine-ut99: via gl4es (see GetGL1Proc)
+	ProcAddress = (void *)gl4es_GetProcAddress(pName);	// through gl4es's translation layer
 #elif defined UTGLR_USE_SDL
 	ProcAddress = (void *)SDL_GL_GetProcAddress(pName);
 #else
@@ -1978,10 +1971,10 @@ UBOOL UOpenGLRenderDevice::SetRes(INT NewX, INT NewY, INT NewColorBytes, UBOOL F
 	Viewport->ResizeViewport(Fullscreen ? (BLIT_Fullscreen | BLIT_OpenGL) : (BLIT_HardwarePaint | BLIT_OpenGL), NewX, NewY, NewColorBytes);
 
 #ifdef __EMSCRIPTEN__
-	// ufront 2.92: antialiasing on the web is the engine's multisampled emulated back buffer (msaa-backbuffer.js,
-	// WebGL 2 only): UseAA asks for NumAASamples, otherwise it is given back (the context outlives a device).
-	// m_usingAA stays false: it selects alpha-to-coverage for masked textures and toggles GL_MULTISAMPLE, which
-	// gl4es's fixed-function emulation only records, so masked textures keep their alpha blend.
+	// Antialiasing on the web is the engine's multisampled emulated back buffer (WebGL 2 only): UseAA asks
+	// for NumAASamples, otherwise the single-sample buffer is restored (the context outlives a device).
+	// m_usingAA stays false: its alpha-to-coverage and GL_MULTISAMPLE switches are only recorded by gl4es,
+	// so masked textures keep their alpha blend.
 	{
 		const INT Got = ufront_backbuffer_samples(UseAA ? NumAASamples : 0);
 		if (Got > 1) debugf(NAME_Init, TEXT("AA: %ix multisampled back buffer"), Got);
@@ -2258,12 +2251,9 @@ UBOOL UOpenGLRenderDevice::SetRes(INT NewX, INT NewY, INT NewColorBytes, UBOOL F
 	UseVertexSpecular = 1;
 
 #ifdef UTGLR_ENGINE_UT99DC
-	// engine-ut99: UTGLR's UseS3TC config member does not reliably carry its compiled default (1) to
-	// the render-device instance in this engine (the per-param bit-offset trick + CDO/config-load
-	// interaction leaves it 0). Read it straight from the ini with a default of ON, so DXT1/S3TC
-	// textures are used whenever the GPU supports the extensions — otherwise the ENGINE silently
-	// decompresses TEXF_DXT1 to RGBA7 before the driver ever sees it (SupportsTC is engine-visible).
-	// Users can still disable it with [OpenGLDrv.OpenGLRenderDevice] UseS3TC=False.
+	// The UseS3TC config bit does not receive its default (1) on this engine, so it is read from the ini
+	// with a default of on; with it off the engine converts DXT1 to RGBA7 before the driver sees it
+	// (SupportsTC). [OpenGLDrv.OpenGLRenderDevice] UseS3TC=False turns it off.
 	{ UBOOL cfgUseS3TC = 1; GConfig->GetBool(g_pSection, TEXT("UseS3TC"), cfgUseS3TC); UseS3TC = cfgUseS3TC; }
 #endif
 
@@ -2626,9 +2616,8 @@ void UOpenGLRenderDevice::ConfigValidate_RequiredExtensions(void) {
 	if (!SUPPORTS_GL_ARB_vertex_program) UseFragmentProgram = 0;
 	if (!SUPPORTS_GL_ARB_fragment_program) UseFragmentProgram = 0;
 #ifdef UTGLR_ENGINE_HP2
-	//hp2: the ARB fragment-program complex-surface programs read the primary colour's alpha as their lightmap
-	//scale selector (OneXBlending), so they cannot carry a Lumos surface's opacity (cAlpha). Off-by-default
-	//legacy path (and unavailable on gl4es/WebGL); HP2 keeps to the fixed-function path, which does.
+	//The ARB fragment programs read the primary colour's alpha as their lightmap scale selector
+	//(OneXBlending), so they cannot carry a Lumos surface's opacity; HP2 uses the fixed-function path.
 	UseFragmentProgram = 0;
 #endif
 	if (!SUPPORTS_GL_EXT_bgra) UseBGRATextures = 0;
@@ -2946,11 +2935,8 @@ UBOOL UOpenGLRenderDevice::Init(UViewport* InViewport, INT NewX, INT NewY, INT N
 	debugf(TEXT("Initializing OpenGLDrv..."));
 
 #ifdef __EMSCRIPTEN__
-	// ufront (2.12): the base feature flags + DetailMax now arrive via the shared LoadConfig() in
-	// UNSDLClient::TryRenderDevice (see NSDLClient.cpp) reading [OpenGLDrv.OpenGLRenderDevice]. SupportsFogMaps
-	// is NOT a config prop (a driver capability set only in StaticConstructor, so also 0 on the zero-init web
-	// instance) -> set it here like XOpenGL's Init does, else the engine's fog-map generation gate
-	// (VolumetricLighting && SupportsFogMaps && bFogZone) fails and zone fog is absent.
+	// SupportsFogMaps is a capability, not a config property, so the zero-initialised web render device
+	// starts without it; the engine generates zone fog maps only when it is set.
 	SupportsFogMaps = 1;
 #endif
 
@@ -2965,24 +2951,17 @@ UBOOL UOpenGLRenderDevice::Init(UViewport* InViewport, INT NewX, INT NewY, INT N
 		bool loadRet;
 
 #ifdef UTGLR_ENGINE_UT99DC
-		// engine-ut99: NSDLDrv creates the SDL window + GL context (and thus loads the GL library)
-		// BEFORE the render device's Init runs, and makes it current. SDL_GL_GetProcAddress already
-		// resolves against it, so do NOT call SDL_GL_LoadLibrary here — SDL reports "OpenGL library
-		// already loaded" and UTGLR treats that as fatal. Matches NOpenGLESDrv, which never loads a
-		// GL library itself.
+		// NSDLDrv has already created the window and the GL context (loading the GL library) and made it
+		// current; SDL_GL_LoadLibrary would fail with "OpenGL library already loaded".
 #ifdef UTGLR_USE_GL4ES
-		// gl4es backend (WebGL path): hand gl4es SDL's loader so it can reach the underlying GLES2
-		// driver, then initialize it (built with NO_INIT_CONSTRUCTOR). GL entry points are then resolved
-		// via gl4es_GetProcAddress (GetGL1Proc/GetGLExtProc), so they hit gl4es' translation layer.
+		// gl4es back end: give gl4es the loader of the underlying GLES driver and initialise it (it is
+		// built with NO_INIT_CONSTRUCTOR); GetGL1Proc and GetGLExtProc then resolve through gl4es.
 		setenv("LIBGL_ES", "2", 1);       // target GLES2
 		setenv("LIBGL_NOBANNER", "1", 1); // no gl4es banner on stdout
 		setenv("LIBGL_USEVBO", "0", 1);   // UTGLR feeds client-side vertex arrays
 #if defined(__EMSCRIPTEN__) && defined(__EMSCRIPTEN_PTHREADS__)
-		// ufront 2.13.2: on a threaded web build the engine runs on a worker and NSDLViewport creates the
-		// WebGL context directly with emscripten_webgl_create_context (SDL's EGL path is unusable there —
-		// Emscripten #24792). SDL therefore owns no context and SDL_GL_GetProcAddress resolves against
-		// nothing, so gl4es would get a null backend and every translated call would go nowhere.
-		// Emscripten's resolver is context-aware and works on the worker.
+		// On a threaded web build NSDLViewport creates the WebGL context on the worker (SDL's EGL path does
+		// not work there, Emscripten issue 24792), so SDL resolves no entry points; Emscripten's resolver does.
 		set_getprocaddress((void*(*)(const char*))emscripten_webgl_get_proc_address);
 #else
 		set_getprocaddress((void*(*)(const char*))SDL_GL_GetProcAddress);
@@ -3728,7 +3707,7 @@ void UOpenGLRenderDevice::Unlock(UBOOL Blit) {
 	//Check for optional frame rate limit
 	if (FrameRateLimit >= 20) {
 #if defined UTGLR_DX_BUILD || defined UTGLR_RUNE_BUILD || defined UTGLR_ENGINE_V400
-		FLOAT curFrameTimestamp;	// engine-ut99: no FTime type (see OpenGL.h)
+		FLOAT curFrameTimestamp;	// v400 has no FTime
 #else
 		FTime curFrameTimestamp;
 #endif
@@ -3888,19 +3867,18 @@ void UOpenGLRenderDevice::DrawComplexSurface(FSceneNode* Frame, FSurfaceInfo& Su
 	}
 
 #ifdef UTGLR_ENGINE_HP2
-	// 433: draw with the flags ARGUMENT, never Surface.PolyFlags — for Lumos surfaces Render passes a modified
-	// copy (PF_Occlude added/removed). cAlpha is TRANSPARENCY (255 = gone) and means something only on Lumos
-	// surfaces; every other surface arrives with 255 (Render/Src/UnRender.cpp, the Lumos block).
+	// 433: draw with the flags passed in, not Surface.PolyFlags (for Lumos surfaces Render passes a modified
+	// copy, PF_Occlude added or removed). cAlpha is the transparency (255 = invisible) and only applies to
+	// Lumos surfaces.
 	DWORD PolyFlags = InPolyFlags & ~PF_AlphaBlend;
 	m_hp2SurfOpacity = 1.0f;
 	if (!GIsEditor && (PolyFlags & PF_HighShadowDetail) && (PolyFlags & (PF_Modulated | PF_Translucent))) {
-		// Lumos surface. Retail D3D7 (D3DDrv/Src/Direct3D7.cpp SetBlending) blends PF_LumosAffected surfaces
-		// out = src*(1-a) + dst*a with a = texA*cAlpha/255; here: straight alpha with opacity 1 - cAlpha/255.
-		// On 433 PF_Modulated/PF_HighShadowDetail only select that blend and PF_Gouraud (LumosAppear) /
-		// PF_DirtyShadows (LumosAlwaysOn) are markers: strip them so the base x lightmap texturing is the
-		// normal one. Requiring PF_HighShadowDetail AND a blend bit keeps plain PF_Modulated polys (blob
-		// shadows) on the classic modulate blend — D3D7's '&' test would make them vanish (renderer-forks §3.3).
-		// Depth writes follow the PF_Occlude Render decided.
+		// Lumos surface. HP2's D3D7 driver blends it out = src*(1-a) + dst*a with a = texA*cAlpha/255; here it
+		// is straight alpha with opacity 1 - cAlpha/255. On 433 PF_Modulated/PF_HighShadowDetail only select
+		// that blend and PF_Gouraud (LumosAppear) / PF_DirtyShadows (LumosAlwaysOn) are markers, so they are
+		// stripped and the base x lightmap texturing is the normal one. Requiring PF_HighShadowDetail and a
+		// blend bit keeps plain PF_Modulated polys (blob shadows) on the modulate blend. Depth writes follow
+		// the PF_Occlude Render chose.
 		PolyFlags &= ~(PF_Modulated | PF_Translucent | PF_HighShadowDetail | PF_Gouraud | PF_DirtyShadows);
 		if ((cAlpha == 255) && !(PolyFlags & PF_Occlude)) {
 			//Fully faded and not occluding: nothing reaches the frame or depth buffer
@@ -4246,7 +4224,7 @@ void UOpenGLRenderDevice::DrawGouraudPolygonOld(FSceneNode* Frame, FTextureInfo&
 #ifdef UTGLR_RUNE_BUILD
 			SingleColorArray[Index].color = FPlaneTo_RGB_Aub(&P->Light, alpha);
 #elif defined(UTGLR_ENGINE_HP2)
-			//hp2: straight-alpha polys carry their opacity per vertex in Light.W
+			//Straight-alpha polys carry their opacity per vertex in Light.W
 			SingleColorArray[Index].color = (PolyFlags & PF_AlphaBlend) ? FPlaneTo_RGBA(&P->Light) : FPlaneTo_RGB_A255(&P->Light);
 #else
 			SingleColorArray[Index].color = FPlaneTo_RGB_A255(&P->Light);
@@ -4299,7 +4277,7 @@ void UOpenGLRenderDevice::DrawGouraudPolygonOld(FSceneNode* Frame, FTextureInfo&
 }
 
 #ifdef UTGLR_ENGINE_HP2
-//433: not an override (see OpenGL.h) — the buffered gouraud path DrawTriangles feeds, one polygon at a time
+//433: not an override; DrawTriangles feeds this buffered gouraud path one polygon at a time
 void UOpenGLRenderDevice::HP2DrawGouraudPolygon(FSceneNode* Frame, FTextureInfo& Info, FTransTexture** Pts, INT NumPts, DWORD PolyFlags, FSpanBuffer* Span) {
 #else
 void UOpenGLRenderDevice::DrawGouraudPolygon(FSceneNode* Frame, FTextureInfo& Info, FTransTexture** Pts, INT NumPts, DWORD PolyFlags, FSpanBuffer* Span) {
@@ -4472,7 +4450,7 @@ void UOpenGLRenderDevice::DrawGouraudPolygon(FSceneNode* Frame, FTextureInfo& In
 			m_pBuffer3VertsProc = Buffer3Verts;
 		}
 #elif defined(UTGLR_ENGINE_HP2)
-		//hp2: a straight-alpha batch (PF_Highlighted|PF_Translucent from HP2AdjustPolyFlags) takes its vertex
+		//A straight-alpha batch (PF_Highlighted|PF_Translucent from HP2AdjustPolyFlags) takes its vertex
 		//alpha from Light.W; only the generic Buffer3Verts writes it (modulated batches use constant white)
 		m_hp2VertexAlpha = ((PolyFlags & PF_AlphaBlend) && (m_requestedColorFlags & CF_COLOR_ARRAY)) ? true : false;
 		if (m_hp2VertexAlpha) {
@@ -4493,11 +4471,11 @@ void UOpenGLRenderDevice::DrawGouraudPolygon(FSceneNode* Frame, FTextureInfo& In
 }
 
 #ifdef UTGLR_ENGINE_HP2
-// 433 blend semantics UT v400/v436 never had (retail D3D7 SetBlending, D3DDrv/Src/Direct3D7.cpp; SoftDrv
-// DrawPoly.cpp DrawTriangles): PF_Highlighted|PF_Translucent is STRAIGHT alpha with the opacity per vertex in
-// Light.W (actors fading out, Render/Src/UnMeshRnLOD.h: Opacity < 1). A masked texture drops the pair and
-// draws masked, as SoftDrv does. Mapped onto upstream's PF_AlphaBlend here, before SetBlend's "PF_Translucent
-// first" order could turn a fading actor into an additive ghost. Also strips the synthetic bit from content.
+// HP2 433 blending, as in its D3D7 driver (SetBlending) and SoftDrv (DrawTriangles): PF_Highlighted|
+// PF_Translucent is straight alpha with the opacity per vertex in Light.W (actors fading out, Opacity < 1);
+// a masked texture drops the pair and draws masked, as SoftDrv does. It maps onto PF_AlphaBlend here,
+// before SetBlend's "PF_Translucent first" order would draw a fading actor additively. The internal bit
+// is stripped from content.
 DWORD FASTCALL UOpenGLRenderDevice::HP2AdjustPolyFlags(DWORD PolyFlags) {
 	PolyFlags &= ~PF_AlphaBlend;
 	if ((PolyFlags & (PF_Highlighted | PF_Translucent)) == (PF_Highlighted | PF_Translucent)) {
@@ -4510,9 +4488,9 @@ DWORD FASTCALL UOpenGLRenderDevice::HP2AdjustPolyFlags(DWORD PolyFlags) {
 }
 
 INT UOpenGLRenderDevice::MaxVertices() {
-	// = retail D3D7 (ACTORPOLY_VERTEX_MAX) and SoftDrv, on every HP2 device: the mesh batcher and the particle
-	// renderer size their vertex/index buffers from it once (Render/Src/UnMeshRn.cpp, UnParticleRn.cpp).
-	// UTGLR's VERTEX_ARRAY_SIZE bounds one flush, not one call, so any value <= 65535 would do.
+	// The same value on every HP2 device (D3D7's ACTORPOLY_VERTEX_MAX, SoftDrv): the mesh batcher and the
+	// particle renderer size their buffers from it once. UTGLR's VERTEX_ARRAY_SIZE bounds one flush, not one
+	// call, so any value up to 65535 would work here.
 	return 256;
 }
 
@@ -4526,10 +4504,10 @@ void UOpenGLRenderDevice::DrawTriangles(FSceneNode* Frame, FTextureInfo& Info, F
 
 	PolyFlags = HP2AdjustPolyFlags(PolyFlags);
 
-	// Three input shapes, exactly as retail D3D7 DrawTriangles (Indices ? indexed list : NumIndices == NumPts ?
-	// fan : list). Every triangle goes through UTGLR's buffered 3-vertex gouraud path, batched by
-	// (PolyFlags, texture) like v436 mesh triangles, so hit-select, the GUglyHackFlags near-Z range hack
-	// (first-person overlay meshes), masked-texture cache ids and vertex fog all keep working.
+	// Three input shapes, as in HP2's D3D7 driver (Indices ? indexed list : NumIndices == NumPts ? fan :
+	// list). Every triangle goes through UTGLR's buffered 3-vertex gouraud path, batched by (PolyFlags,
+	// texture) like v436 mesh triangles, so hit-select, the GUglyHackFlags near-Z range hack (first-person
+	// overlay meshes), masked-texture cache ids and vertex fog all apply.
 	if (Indices) {
 		// Indexed triangle list: every mesh (vertex, LOD and CPU-skinned skeletal, via the Render mesh batcher)
 		// and every particle system. Pts may hold vertices no index references (particles), so only the
@@ -4549,12 +4527,12 @@ void UOpenGLRenderDevice::DrawTriangles(FSceneNode* Frame, FTextureInfo& Info, F
 		}
 	}
 	else if (NumIndices == NumPts) {
-		// One convex polygon drawn as a fan: BSP decals incl. actor blob shadows (Render/Src/UnRender.cpp) and
-		// the base URenderDevice::DrawGouraudPolygon forwarder (Engine/Src/UnCamera.cpp).
+		// One convex polygon drawn as a fan: BSP decals, actor blob shadows included, and the base
+		// URenderDevice::DrawGouraudPolygon forwarder.
 		HP2DrawGouraudPolygon(Frame, Info, Pts, NumPts, PolyFlags, Span);
 	}
 	else {
-		// Plain non-indexed triangle list of NumPts vertices (no 433 caller compiles it; kept for the contract).
+		// Plain triangle list of NumPts vertices (part of the interface; no 433 caller uses it).
 		for (INT v = 0; v + 3 <= NumPts; v += 3) {
 			HP2DrawGouraudPolygon(Frame, Info, &Pts[v], 3, PolyFlags, Span);
 		}
@@ -4568,18 +4546,15 @@ void UOpenGLRenderDevice::DrawTile(FSceneNode* Frame, FTextureInfo& Info, FLOAT 
 	UTGLR_DEBUG_CALL_COUNT(DrawTile);
 	guard(UOpenGLRenderDevice::DrawTile);
 
-	// 2.12 (web): HUD/menu/font/cursor tiles arrive at Z==1 (2D screen-space overlays). UTGLR depth-tests
-	// tiles and relies on its ZRangeHack to sort them on top, but on the web/gl4es path the 3D scene behind
-	// a menu can depth-cull them — the UWindow mouse cursor vanished under UTGLR while XOpenGL (disables
-	// depth for HUD tiles) and SoftDrv (no depth) drew it. Draw 2D-overlay tiles (incoming Z==1) with
-	// depth-test off so they always land on top. Native UTGLR keeps its existing behavior (#ifdef guard).
+	// 2D overlay tiles (HUD, menus, fonts, the cursor) arrive at Z == 1. On the web (gl4es) the scene's
+	// depth can hide them despite the ZRangeHack, so there they draw with the depth test off.
 	const UBOOL bOverlayTile2D = (Z == 1.f);
 
 	//DrawTile does not use PolyFlags2
 	const DWORD PolyFlags2 = 0;
 
 #ifdef UTGLR_ENGINE_HP2
-	//hp2: tiles take the v436 path; never let a stray content bit select the synthetic straight-alpha mode
+	//Tiles take the v436 path; a content bit never selects the internal straight-alpha mode
 	PolyFlags &= ~PF_AlphaBlend;
 #endif
 
@@ -4600,7 +4575,7 @@ void UOpenGLRenderDevice::DrawTile(FSceneNode* Frame, FTextureInfo& Info, FLOAT 
 	}
 
 #ifdef __EMSCRIPTEN__
-	// See the 2D-overlay note above: draw screen-space overlay tiles with depth-test off (web/gl4es).
+	// 2D overlay tile: no depth test.
 	if (bOverlayTile2D) {
 		EndTileBuffering();
 		glDisable(GL_DEPTH_TEST);
@@ -4699,8 +4674,8 @@ void UOpenGLRenderDevice::DrawTile(FSceneNode* Frame, FTextureInfo& Info, FLOAT 
 			if (Info.Palette && Info.Palette[128].A != 255 && !(PolyFlags & PF_Translucent)) {
 #endif
 #ifdef UTGLR_ENGINE_HP2
-				//hp2 (retail D3D7 433 DrawTile + AdjustPolyFlags): an alpha-palette tile is premultiplied
-				//PF_Highlighted WITHOUT PF_Occlude, so its transparent texels write no depth (world sprites)
+				//As in HP2's D3D7 driver: an alpha-palette tile is premultiplied PF_Highlighted without
+				//PF_Occlude, so its transparent texels write no depth (world sprites)
 				PolyFlags |= PF_Highlighted;
 #else
 				PolyFlags |= PF_Highlighted | PF_Occlude;
@@ -4856,7 +4831,7 @@ void UOpenGLRenderDevice::DrawTile(FSceneNode* Frame, FTextureInfo& Info, FLOAT 
 		if (Info.Palette && Info.Palette[128].A != 255 && !(PolyFlags & PF_Translucent)) {
 #endif
 #ifdef UTGLR_ENGINE_HP2
-			//hp2: premultiplied PF_Highlighted without PF_Occlude (see the buffered path above)
+			//Premultiplied PF_Highlighted without PF_Occlude, as in the buffered path
 			PolyFlags |= PF_Highlighted;
 #else
 			PolyFlags |= PF_Highlighted | PF_Occlude;
@@ -4916,7 +4891,7 @@ void UOpenGLRenderDevice::DrawTile(FSceneNode* Frame, FTextureInfo& Info, FLOAT 
 	}
 
 #ifdef __EMSCRIPTEN__
-	// Restore depth-test after a 2D-overlay tile (see the note at the top of DrawTile).
+	// Restore the depth test after a 2D overlay tile.
 	if (bOverlayTile2D)
 		glEnable(GL_DEPTH_TEST);
 #endif
@@ -4937,8 +4912,7 @@ void UOpenGLRenderDevice::Draw3DLine(FSceneNode* Frame, FPlane Color, DWORD Line
 	SetDefaultTextureState();
 
 #ifdef UTGLR_ENGINE_HP2
-	//433 LINE_PreTransformed: the points are already in camera space (mirrors URenderDevice::Draw3DLine,
-	//Engine/Src/UnCamera.cpp; no HP2 caller passes it today)
+	//433 LINE_PreTransformed: the points are already in camera space, as in URenderDevice::Draw3DLine
 	if (!(LineFlags & LINE_PreTransformed)) {
 		P1 = P1.TransformPointBy(Frame->Coords);
 		P2 = P2.TransformPointBy(Frame->Coords);
@@ -6129,7 +6103,7 @@ void UOpenGLRenderDevice::CacheTextureInfo(FCachedTexture *pBind, const FTexture
 	TCHAR dbgStr[1024];
 	TCHAR numStr[32];
 
-	dbgStr[0] = 0;	// engine-ut99: was _T('\0') (no <tchar.h> on Linux; ANSI TCHAR)
+	dbgStr[0] = 0;
 	appStrcat(dbgStr, TEXT("utglr: ZPBindTree Size = "));
 	for (u = 0; u < NUM_CTTree_TREES; u++) {
 		appSprintf(numStr, TEXT("%u"), m_zeroPrefixBindTrees[u].calc_size());
@@ -6138,7 +6112,7 @@ void UOpenGLRenderDevice::CacheTextureInfo(FCachedTexture *pBind, const FTexture
 	}
 	dbgPrintf("%s\n", appToAnsi(dbgStr));
 
-	dbgStr[0] = 0;	// engine-ut99: was _T('\0') (no <tchar.h> on Linux; ANSI TCHAR)
+	dbgStr[0] = 0;
 	appStrcat(dbgStr, TEXT("utglr: NZPBindTree Size = "));
 	for (u = 0; u < NUM_CTTree_TREES; u++) {
 		appSprintf(numStr, TEXT("%u"), m_nonZeroPrefixBindTrees[u].calc_size());
@@ -6653,7 +6627,7 @@ void UOpenGLRenderDevice::SetTexEnvNoCheck(DWORD texUnit, DWORD texEnvFlags) {
 			glTexEnvf(GL_TEXTURE_ENV, GL_RGB_SCALE_EXT, 2.0f);
 #ifdef UTGLR_ENGINE_HP2
 			if (texUnit != 0) {
-				//hp2: a modulating unit after the base (lightmap, macro) passes the base alpha through instead of
+				//A modulating unit after the base (lightmap, macro) passes the base alpha through instead of
 				//multiplying in its own: UTGLR uploads RGBA7 lightmaps x2 including A, which would otherwise
 				//scale a Lumos surface's opacity texel by texel. Only masked/alpha-blended bases read this alpha.
 				glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA_EXT, GL_REPLACE);
@@ -6663,7 +6637,7 @@ void UOpenGLRenderDevice::SetTexEnvNoCheck(DWORD texUnit, DWORD texEnvFlags) {
 		}
 #ifdef UTGLR_ENGINE_HP2
 		else if ((texUnit != 0) && SUPPORTS_GL_EXT_texture_env_combine) {
-			//hp2, OneXBlending: the same alpha pass-through at 1x colour scale (plain GL_MODULATE would multiply alpha)
+			//OneXBlending: the same alpha pass-through at 1x colour scale (plain GL_MODULATE would multiply alpha)
 			glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE_EXT);
 
 			glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB_EXT, GL_MODULATE);
@@ -6739,13 +6713,9 @@ void UOpenGLRenderDevice::SetTexEnvNoCheck(DWORD texUnit, DWORD texEnvFlags) {
 			glTexEnvf(GL_TEXTURE_ENV, GL_RGB_SCALE_EXT, 1.0f);
 		}
 		else {
-			// ufront (2.12): gl4es/WebGL1 provides NEITHER ATI_texture_env_combine3 NOR
-			// NV_texture_env_combine4, so the vendor COMBINE modes above set an unsupported texenv and the
-			// fog pass produced no output (black fog). SinglePassFog is force-disabled without those
-			// extensions (ConfigValidate_RequiredExtensions), so fog is drawn as its OWN single-texture pass
-			// -> the fog color just needs to reach the framebuffer via the PF_Highlighted blend
-			// (GL_ONE, GL_ONE_MINUS_SRC_ALPHA); a plain MODULATE (fog texel * white primary) does that.
-			// Fixes UTGLR zone fog on the web (gl4es) path.
+			// Neither combine extension (gl4es): SinglePassFog is off without them
+			// (ConfigValidate_RequiredExtensions), so fog is its own single-texture pass and GL_MODULATE
+			// (fog texel x white) carries it to the PF_Highlighted blend (GL_ONE, GL_ONE_MINUS_SRC_ALPHA).
 			glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
 		}
 	}
@@ -7416,12 +7386,12 @@ void UOpenGLRenderDevice::RenderPassesNoCheckSetup(void) {
 	glColor3fv(m_complexSurfaceColor3f_1f);
 #ifdef UTGLR_ENGINE_HP2
 	if (MultiPass.TMU[0].PolyFlags & PF_AlphaBlend) {
-		//hp2 Lumos: opacity rides the primary colour's alpha -> unit 0 alpha = texA * opacity; the lightmap/macro
+		//Lumos: opacity rides the primary colour's alpha -> unit 0 alpha = texA * opacity; the lightmap/macro
 		//units pass it through untouched (SetTexEnvNoCheck), so the blender sees exactly texA * (1 - cAlpha/255)
 		glColor4f(m_complexSurfaceColor3f_1f[0], m_complexSurfaceColor3f_1f[1], m_complexSurfaceColor3f_1f[2], m_hp2SurfOpacity);
 	}
 	else if ((m_hp2SurfOpacity < 1.0f) && (MultiPass.TMU[0].PolyFlags == PF_Highlighted)) {
-		//hp2 Lumos: the separate fog-map pass over a see-through surface is premultiplied (GL_ONE,
+		//Lumos: the separate fog-map pass over a see-through surface is premultiplied (GL_ONE,
 		//GL_ONE_MINUS_SRC_ALPHA): scale all four channels so the fog fades with the surface
 		glColor4f(m_hp2SurfOpacity, m_hp2SurfOpacity, m_hp2SurfOpacity, m_hp2SurfOpacity);
 	}
