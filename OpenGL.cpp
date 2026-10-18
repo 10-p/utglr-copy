@@ -3625,16 +3625,6 @@ void UOpenGLRenderDevice::Unlock(UBOOL Blit) {
 	UTGLR_DEBUG_CALL_COUNT(Unlock);
 	guard(UOpenGLRenderDevice::Unlock);
 
-#ifdef UTGLR_ENGINE_UT99DC
-	// engine-ut99: throttled frame heartbeat (mirrors NOpenGLESDrv) — proves the render loop is
-	// actually running under the headless SDL-offscreen oracle. Cheap; every 60th Unlock.
-	{
-		static INT utglr_UnlockCount = 0;
-		if( ((++utglr_UnlockCount) % 60) == 0 )
-			debugf( NAME_Log, TEXT("OpenGLDrv(UTGLR): Unlock %i (Blit=%i)"), utglr_UnlockCount, (INT)Blit );
-	}
-#endif
-
 	EndBuffering();
 
 	SetDefaultAAState();
