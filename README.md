@@ -13,18 +13,14 @@ sources carry only Epic Games copyright headers ("Copyright 1997-1999 Epic Games
 Reserved." and "Portions copyright 1999 Epic Games, Inc."), and the bundled Khronos `glext.h` and
 `wglext.h` carry the SGI Free Software License B 1.1.
 
-## Branches
+## The branch
 
-| Branch | Engine | Built by |
-|---|---|---|
-| `main` | Unreal Tournament v400 | engine-ut99, engine-ut99-436-compat |
-| `hp2` | Harry Potter and the Chamber of Secrets (UE1 build 433) | engine-hp2, engine-hp2-retail |
+`main` serves every engine: Unreal Tournament v400 (engine-ut99 and its v436 branch) and Harry Potter and the
+Chamber of Secrets (UE1 build 433; engine-hp2 and its retail branch). `UTGLR_ENGINE_UT99DC` selects the SDL2
+platform layer, `UTGLR_USE_GL4ES` the gl4es back end and `UTGLR_ENGINE_HP2` the HP2 interface; a build that
+defines none of them compiles the author's code paths.
 
-The engines fetch a branch by name. `UTGLR_ENGINE_UT99DC` selects the SDL2 platform layer,
-`UTGLR_USE_GL4ES` the gl4es back end and `UTGLR_ENGINE_HP2` the HP2 interface; a build that defines
-none of them compiles the author's code paths.
-
-Both branches add:
+It adds:
 
 * **UE1 v400 and SDL2 platform**: NSDLDrv owns the window, the GL context and the buffer swap; the
   driver uses SDL2 with no-op shims for the SDL 1.2 calls, v400's 3-argument `DECLARE_CLASS` and
@@ -40,7 +36,7 @@ Both branches add:
   samples (`ufront_backbuffer_samples`, WebGL 2 only).
 * **LP64 pointer arithmetic**: pointer alignment and the bind-map node offset go through `UPTRINT`.
 
-`hp2` also adds:
+For HP2 (`UTGLR_ENGINE_HP2`):
 
 * **Engine-type macros**: `UTGLR_ENGINE_V400` (UT99 v400 only) is split from the platform switch, so
   HP2 433 uses v436's `DECLARE_CLASS` and `FTime`; `UTGLR_HAS_ALPHABLEND` enables the Rune / 227
