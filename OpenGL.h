@@ -29,6 +29,29 @@
 #undef UTGLR_VALID_BUILD_CONFIG
 
 
+// Engine selection:
+//   UTGLR_ENGINE_UT99DC: the SDL2 platform layer (SDL2 shims, NSDLDrv-owned context, gl4es, web paths);
+//                        defined for UT99 v400 and HP2 433.
+//   UTGLR_ENGINE_V400:   derived, UT99 v400 only: its engine types (3-argument DECLARE_CLASS, no FTime).
+//                        HP2 433 has v436's types and takes the UTGLR_UT_BUILD branches there.
+//   UTGLR_ENGINE_HP2:    UE1 build 433 (Harry Potter and the Chamber of Secrets): its render-device
+//                        interface (5-argument DrawComplexSurface with Lumos cAlpha, MaxVertices,
+//                        DrawTriangles) and its blend semantics.
+// UTGLR_HAS_ALPHABLEND enables the Rune/227 PF_AlphaBlend path (straight alpha, no additive fog pass),
+// which HP2 uses for its Highlighted|Translucent vertex-alpha mode and for Lumos.
+#if defined(UTGLR_ENGINE_UT99DC) && !defined(UTGLR_ENGINE_HP2)
+#define UTGLR_ENGINE_V400 1
+#endif
+#if defined(UTGLR_RUNE_BUILD) || defined(UTGLR_UNREAL_227_BUILD) || defined(UTGLR_ENGINE_HP2)
+#define UTGLR_HAS_ALPHABLEND 1
+#endif
+#if defined(UTGLR_ENGINE_HP2)
+// Driver-internal: 0x20000000 is the one EPolyFlags bit build 433 leaves unassigned. Content never
+// sets it; every HP2 entry point strips it from incoming flags.
+#define PF_AlphaBlend 0x20000000
+#endif
+
+
 #include <math.h>
 #include <string.h>
 #include <stdio.h>
@@ -358,11 +381,12 @@ typedef struct {
 // An OpenGL rendering device attached to a viewport.
 //
 class UOpenGLRenderDevice : public URenderDevice {
-#if defined UTGLR_DX_BUILD || defined UTGLR_ENGINE_UT99DC
+#if defined UTGLR_DX_BUILD || defined UTGLR_ENGINE_V400
 	// UE1 v400 has the 3-argument DECLARE_CLASS; the package comes from IMPLEMENT_PACKAGE /
 	// THIS_PACKAGE.
 	DECLARE_CLASS(UOpenGLRenderDevice, URenderDevice, CLASS_Config)
 #else
+	// v436 and HP2 433: the 4-argument DECLARE_CLASS.
 	DECLARE_CLASS(UOpenGLRenderDevice, URenderDevice, CLASS_Config, OpenGLDrv)
 #endif
 
@@ -636,10 +660,11 @@ class UOpenGLRenderDevice : public URenderDevice {
 	UBOOL UseFragmentProgram;
 	INT SwapInterval;
 	INT FrameRateLimit;
-#if defined UTGLR_DX_BUILD || defined UTGLR_RUNE_BUILD || defined UTGLR_ENGINE_UT99DC
+#if defined UTGLR_DX_BUILD || defined UTGLR_RUNE_BUILD || defined UTGLR_ENGINE_V400
 	// UE1 v400 has no FTime; the frame-rate limiter stores appSeconds() here.
 	FLOAT m_prevFrameTimestamp;
 #else
+	// v436 and HP2 433: appSeconds() returns FTime (FTime - FTime -> float).
 	FTime m_prevFrameTimestamp;
 #endif
 	UBOOL SceneNodeHack;
@@ -757,6 +782,12 @@ class UOpenGLRenderDevice : public URenderDevice {
 
 	BYTE m_gpAlpha;
 	bool m_gpFogEnabled;
+#ifdef UTGLR_ENGINE_HP2
+	//Opacity of the Lumos complex surface being drawn (1 - cAlpha/255), 1 for every other surface
+	FLOAT m_hp2SurfOpacity;
+	//The buffered gouraud batch is straight-alpha (PF_AlphaBlend) and takes its vertex alpha from Light.W
+	bool m_hp2VertexAlpha;
+#endif
 
 	DWORD m_curTexEnvFlags[MAX_TMUNITS];
 	FTexInfo TexInfo[MAX_TMUNITS];
@@ -1115,7 +1146,18 @@ class UOpenGLRenderDevice : public URenderDevice {
 	void Unlock(UBOOL Blit);
 	void Flush(UBOOL AllowPrecache);
 
+#ifdef UTGLR_ENGINE_HP2
+	// UE1 build 433 render-device interface: 5-argument DrawComplexSurface (the flags to draw with and the
+	// Lumos transparency), MaxVertices, DrawTriangles. On 433 URenderDevice::DrawGouraudPolygon forwards to
+	// DrawTriangles and is not overridden, so UTGLR's buffered gouraud body is the non-virtual
+	// HP2DrawGouraudPolygon below, fed by DrawTriangles.
+	void DrawComplexSurface(FSceneNode* Frame, FSurfaceInfo& Surface, FSurfaceFacet& Facet, DWORD PolyFlags, BYTE cAlpha);
+	INT MaxVertices();
+	void DrawTriangles(FSceneNode* Frame, FTextureInfo& Info, FTransTexture** Pts, INT NumPts, _WORD* Indices, INT NumIndices, DWORD PolyFlags, FSpanBuffer* Span);
+	static DWORD FASTCALL HP2AdjustPolyFlags(DWORD PolyFlags);
+#else
 	void DrawComplexSurface(FSceneNode* Frame, FSurfaceInfo& Surface, FSurfaceFacet& Facet);
+#endif
 #ifdef UTGLR_RUNE_BUILD
 	void PreDrawFogSurface();
 	void PostDrawFogSurface();
@@ -1124,7 +1166,11 @@ class UOpenGLRenderDevice : public URenderDevice {
 	void PostDrawGouraud(FLOAT FogDistance);
 #endif
 	void DrawGouraudPolygonOld(FSceneNode* Frame, FTextureInfo& Info, FTransTexture** Pts, INT NumPts, DWORD PolyFlags, FSpanBuffer* Span);
+#ifdef UTGLR_ENGINE_HP2
+	void HP2DrawGouraudPolygon(FSceneNode* Frame, FTextureInfo& Info, FTransTexture** Pts, INT NumPts, DWORD PolyFlags, FSpanBuffer* Span);
+#else
 	void DrawGouraudPolygon(FSceneNode* Frame, FTextureInfo& Info, FTransTexture** Pts, INT NumPts, DWORD PolyFlags, FSpanBuffer* Span);
+#endif
 	void DrawTile(FSceneNode* Frame, FTextureInfo& Info, FLOAT X, FLOAT Y, FLOAT XL, FLOAT YL, FLOAT U, FLOAT V, FLOAT UL, FLOAT VL, class FSpanBuffer* Span, FLOAT Z, FPlane Color, FPlane Fog, DWORD PolyFlags);
 	void Draw3DLine(FSceneNode* Frame, FPlane Color, DWORD LineFlags, FVector P1, FVector P2);
 	void Draw2DLine(FSceneNode* Frame, FPlane Color, DWORD LineFlags, FVector P1, FVector P2);
@@ -1285,6 +1331,14 @@ class UOpenGLRenderDevice : public URenderDevice {
 			}
 		}
 		else
+#elif defined(UTGLR_ENGINE_HP2)
+		//Straight alpha (vertex-alpha actors, Lumos surfaces) never gains PF_Occlude here: depth writes follow
+		//the incoming flags (Render chose them for Lumos; HP2's D3D7 driver gives blended polys no Occlude).
+		//Alpha blending already hides masked-out texels.
+		if (PolyFlags & PF_AlphaBlend) {
+			PolyFlags &= ~PF_Masked;
+		}
+		else
 #endif
 		if (!(PolyFlags & (PF_Translucent | PF_Modulated | PF_Highlighted))) {
 			PolyFlags |= PF_Occlude;
@@ -1296,7 +1350,7 @@ class UOpenGLRenderDevice : public URenderDevice {
 		//Only check relevant blend flags
 #ifdef UTGLR_RUNE_BUILD
 		DWORD blendFlags = PolyFlags & (PF_Translucent | PF_Modulated | PF_Invisible | PF_Occlude | PF_Masked | PF_Highlighted | PF_AlphaBlend);
-#elif  UTGLR_UNREAL_227_BUILD
+#elif defined(UTGLR_HAS_ALPHABLEND)	// Unreal 227, HP2
 		DWORD blendFlags = PolyFlags & (PF_Translucent | PF_Modulated | PF_Invisible | PF_Occlude | PF_Masked | PF_Highlighted | PF_AlphaBlend);
 #else
 		DWORD blendFlags = PolyFlags & (PF_Translucent | PF_Modulated | PF_Invisible | PF_Occlude | PF_Masked | PF_Highlighted);

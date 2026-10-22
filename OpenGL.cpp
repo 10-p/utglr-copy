@@ -1080,6 +1080,9 @@ static void FASTCALL Buffer3Verts(UOpenGLRenderDevice *pRD, FTransTexture** Pts)
 		else if (pRD->m_requestedColorFlags & UOpenGLRenderDevice::CF_COLOR_ARRAY) {
 #ifdef UTGLR_RUNE_BUILD
 			pSingleColorArray->color = UOpenGLRenderDevice::FPlaneTo_RGB_Aub(&P->Light, pRD->m_gpAlpha);
+#elif defined(UTGLR_ENGINE_HP2)
+			//Straight-alpha polys carry their opacity per vertex in Light.W
+			pSingleColorArray->color = pRD->m_hp2VertexAlpha ? UOpenGLRenderDevice::FPlaneTo_RGBA(&P->Light) : UOpenGLRenderDevice::FPlaneTo_RGB_A255(&P->Light);
 #else
 			pSingleColorArray->color = UOpenGLRenderDevice::FPlaneTo_RGB_A255(&P->Light);
 #endif
@@ -1569,6 +1572,8 @@ void UOpenGLRenderDevice::BufferAdditionalClippedVerts(FTransTexture** Pts, INT 
 		else if (m_requestedColorFlags & CF_COLOR_ARRAY) {
 #ifdef UTGLR_RUNE_BUILD
 			SingleColorArray[BufferedVerts].color = FPlaneTo_RGB_Aub(&P->Light, m_gpAlpha);
+#elif defined(UTGLR_ENGINE_HP2)
+			SingleColorArray[BufferedVerts].color = m_hp2VertexAlpha ? FPlaneTo_RGBA(&P->Light) : FPlaneTo_RGB_A255(&P->Light);
 #else
 			SingleColorArray[BufferedVerts].color = FPlaneTo_RGB_A255(&P->Light);
 #endif
@@ -2610,6 +2615,11 @@ void UOpenGLRenderDevice::ConfigValidate_RefreshDCV(void) {
 void UOpenGLRenderDevice::ConfigValidate_RequiredExtensions(void) {
 	if (!SUPPORTS_GL_ARB_vertex_program) UseFragmentProgram = 0;
 	if (!SUPPORTS_GL_ARB_fragment_program) UseFragmentProgram = 0;
+#ifdef UTGLR_ENGINE_HP2
+	//The ARB fragment programs read the primary colour's alpha as their lightmap scale selector
+	//(OneXBlending), so they cannot carry a Lumos surface's opacity; HP2 uses the fixed-function path.
+	UseFragmentProgram = 0;
+#endif
 	if (!SUPPORTS_GL_EXT_bgra) UseBGRATextures = 0;
 	if (!SUPPORTS_GL_EXT_multi_draw_arrays) UseMultiDrawArrays = 0;
 	if (!SUPPORTS_GL_EXT_paletted_texture) UsePalette = 0;
@@ -3686,7 +3696,7 @@ void UOpenGLRenderDevice::Unlock(UBOOL Blit) {
 
 	//Check for optional frame rate limit
 	if (FrameRateLimit >= 20) {
-#if defined UTGLR_DX_BUILD || defined UTGLR_RUNE_BUILD || defined UTGLR_ENGINE_UT99DC
+#if defined UTGLR_DX_BUILD || defined UTGLR_RUNE_BUILD || defined UTGLR_ENGINE_V400
 		FLOAT curFrameTimestamp;	// v400 has no FTime
 #else
 		FTime curFrameTimestamp;
@@ -3790,7 +3800,11 @@ void UOpenGLRenderDevice::Flush(UBOOL AllowPrecache) {
 }
 
 
+#ifdef UTGLR_ENGINE_HP2
+void UOpenGLRenderDevice::DrawComplexSurface(FSceneNode* Frame, FSurfaceInfo& Surface, FSurfaceFacet& Facet, DWORD InPolyFlags, BYTE cAlpha) {
+#else
 void UOpenGLRenderDevice::DrawComplexSurface(FSceneNode* Frame, FSurfaceInfo& Surface, FSurfaceFacet& Facet) {
+#endif
 	UTGLR_DEBUG_CALL_COUNT(DrawComplexSurface);
 	guard(UOpenGLRenderDevice::DrawComplexSurface);
 
@@ -3842,6 +3856,31 @@ void UOpenGLRenderDevice::DrawComplexSurface(FSceneNode* Frame, FSurfaceInfo& Su
 		return;
 	}
 
+#ifdef UTGLR_ENGINE_HP2
+	// 433: draw with the flags passed in, not Surface.PolyFlags (for Lumos surfaces Render passes a modified
+	// copy, PF_Occlude added or removed). cAlpha is the transparency (255 = invisible) and only applies to
+	// Lumos surfaces.
+	DWORD PolyFlags = InPolyFlags & ~PF_AlphaBlend;
+	m_hp2SurfOpacity = 1.0f;
+	if (!GIsEditor && (PolyFlags & PF_HighShadowDetail) && (PolyFlags & (PF_Modulated | PF_Translucent))) {
+		// Lumos surface. HP2's D3D7 driver blends it out = src*(1-a) + dst*a with a = texA*cAlpha/255; here it
+		// is straight alpha with opacity 1 - cAlpha/255. On 433 PF_Modulated/PF_HighShadowDetail only select
+		// that blend and PF_Gouraud (LumosAppear) / PF_DirtyShadows (LumosAlwaysOn) are markers, so they are
+		// stripped and the base x lightmap texturing is the normal one. Requiring PF_HighShadowDetail and a
+		// blend bit keeps plain PF_Modulated polys (blob shadows) on the modulate blend. Depth writes follow
+		// the PF_Occlude Render chose.
+		PolyFlags &= ~(PF_Modulated | PF_Translucent | PF_HighShadowDetail | PF_Gouraud | PF_DirtyShadows);
+		if ((cAlpha == 255) && !(PolyFlags & PF_Occlude)) {
+			//Fully faded and not occluding: nothing reaches the frame or depth buffer
+			return;
+		}
+		if (cAlpha != 0) {
+			m_hp2SurfOpacity = (255 - cAlpha) / 255.0f;
+			PolyFlags |= PF_AlphaBlend;
+		}
+	}
+#endif
+
 	clock(ComplexCycles);
 
 	//Calculate UDot and VDot intermediates for complex surface
@@ -3874,6 +3913,12 @@ void UOpenGLRenderDevice::DrawComplexSurface(FSceneNode* Frame, FSurfaceInfo& Su
 	if ((DetailTextures != 0) && Surface.DetailTexture && !Surface.FogMap) {
 		drawDetailTexture = true;
 	}
+#ifdef UTGLR_ENGINE_HP2
+	//A see-through Lumos surface gets no detail pass: its modulated overlay would darken what shows through
+	if (PolyFlags & PF_AlphaBlend) {
+		drawDetailTexture = false;
+	}
+#endif
 
 	//Check for detail texture
 	if (drawDetailTexture == true) {
@@ -3889,7 +3934,9 @@ void UOpenGLRenderDevice::DrawComplexSurface(FSceneNode* Frame, FSurfaceInfo& Su
 	}
 
 
+#ifndef UTGLR_ENGINE_HP2
 	DWORD PolyFlags = Surface.PolyFlags;
+#endif
 
 	//Initialize render passes state information
 	m_rpPassCount = 0;
@@ -4166,6 +4213,9 @@ void UOpenGLRenderDevice::DrawGouraudPolygonOld(FSceneNode* Frame, FTextureInfo&
 		if (m_requestedColorFlags & CF_COLOR_ARRAY) {
 #ifdef UTGLR_RUNE_BUILD
 			SingleColorArray[Index].color = FPlaneTo_RGB_Aub(&P->Light, alpha);
+#elif defined(UTGLR_ENGINE_HP2)
+			//Straight-alpha polys carry their opacity per vertex in Light.W
+			SingleColorArray[Index].color = (PolyFlags & PF_AlphaBlend) ? FPlaneTo_RGBA(&P->Light) : FPlaneTo_RGB_A255(&P->Light);
 #else
 			SingleColorArray[Index].color = FPlaneTo_RGB_A255(&P->Light);
 #endif
@@ -4185,7 +4235,7 @@ void UOpenGLRenderDevice::DrawGouraudPolygonOld(FSceneNode* Frame, FTextureInfo&
 
 #ifdef UTGLR_RUNE_BUILD
 	if ((PolyFlags & (PF_RenderFog | PF_Translucent | PF_Modulated | PF_AlphaBlend)) == PF_RenderFog) {
-#elif UTGLR_UNREAL_227_BUILD
+#elif defined(UTGLR_HAS_ALPHABLEND)	// Unreal 227, HP2: alpha-blended polys get no additive fog pass
 	if ((PolyFlags & (PF_RenderFog | PF_Translucent | PF_Modulated | PF_AlphaBlend)) == PF_RenderFog) {
 #else
 	if ((PolyFlags & (PF_RenderFog | PF_Translucent | PF_Modulated)) == PF_RenderFog) {
@@ -4216,7 +4266,12 @@ void UOpenGLRenderDevice::DrawGouraudPolygonOld(FSceneNode* Frame, FTextureInfo&
 	unguard;
 }
 
+#ifdef UTGLR_ENGINE_HP2
+//433: not an override; DrawTriangles feeds this buffered gouraud path one polygon at a time
+void UOpenGLRenderDevice::HP2DrawGouraudPolygon(FSceneNode* Frame, FTextureInfo& Info, FTransTexture** Pts, INT NumPts, DWORD PolyFlags, FSpanBuffer* Span) {
+#else
 void UOpenGLRenderDevice::DrawGouraudPolygon(FSceneNode* Frame, FTextureInfo& Info, FTransTexture** Pts, INT NumPts, DWORD PolyFlags, FSpanBuffer* Span) {
+#endif
 	UTGLR_DEBUG_CALL_COUNT(DrawGouraudPolygon);
 	guard(UOpenGLRenderDevice::DrawGouraudPolygon);
 
@@ -4340,7 +4395,7 @@ void UOpenGLRenderDevice::DrawGouraudPolygon(FSceneNode* Frame, FTextureInfo& In
 
 #ifdef UTGLR_RUNE_BUILD
 			if (((PolyFlags & (PF_RenderFog | PF_Translucent | PF_Modulated | PF_AlphaBlend)) == PF_RenderFog) && UseVertexSpecular) {
-#elif UTGLR_UNREAL_227_BUILD
+#elif defined(UTGLR_HAS_ALPHABLEND)	// Unreal 227, HP2
 			if (((PolyFlags & (PF_RenderFog | PF_Translucent | PF_Modulated | PF_AlphaBlend)) == PF_RenderFog) && UseVertexSpecular) {
 #else
 			if (((PolyFlags & (PF_RenderFog | PF_Translucent | PF_Modulated)) == PF_RenderFog) && UseVertexSpecular) {
@@ -4384,6 +4439,13 @@ void UOpenGLRenderDevice::DrawGouraudPolygon(FSceneNode* Frame, FTextureInfo& In
 			m_gpAlpha = appRound(Info.Texture->Alpha * 255.0f);
 			m_pBuffer3VertsProc = Buffer3Verts;
 		}
+#elif defined(UTGLR_ENGINE_HP2)
+		//A straight-alpha batch (PF_Highlighted|PF_Translucent from HP2AdjustPolyFlags) takes its vertex
+		//alpha from Light.W; only the generic Buffer3Verts writes it (modulated batches use constant white)
+		m_hp2VertexAlpha = ((PolyFlags & PF_AlphaBlend) && (m_requestedColorFlags & CF_COLOR_ARRAY)) ? true : false;
+		if (m_hp2VertexAlpha) {
+			m_pBuffer3VertsProc = Buffer3Verts;
+		}
 #endif
 	}
 
@@ -4398,6 +4460,78 @@ void UOpenGLRenderDevice::DrawGouraudPolygon(FSceneNode* Frame, FTextureInfo& In
 	unguard;
 }
 
+#ifdef UTGLR_ENGINE_HP2
+// HP2 433 blending, as in its D3D7 driver (SetBlending) and SoftDrv (DrawTriangles): PF_Highlighted|
+// PF_Translucent is straight alpha with the opacity per vertex in Light.W (actors fading out, Opacity < 1);
+// a masked texture drops the pair and draws masked, as SoftDrv does. It maps onto PF_AlphaBlend here,
+// before SetBlend's "PF_Translucent first" order would draw a fading actor additively. The internal bit
+// is stripped from content.
+DWORD FASTCALL UOpenGLRenderDevice::HP2AdjustPolyFlags(DWORD PolyFlags) {
+	PolyFlags &= ~PF_AlphaBlend;
+	if ((PolyFlags & (PF_Highlighted | PF_Translucent)) == (PF_Highlighted | PF_Translucent)) {
+		PolyFlags &= ~(PF_Highlighted | PF_Translucent);
+		if (!(PolyFlags & PF_Masked)) {
+			PolyFlags |= PF_AlphaBlend;
+		}
+	}
+	return PolyFlags;
+}
+
+INT UOpenGLRenderDevice::MaxVertices() {
+	// The same value on every HP2 device (D3D7's ACTORPOLY_VERTEX_MAX, SoftDrv): the mesh batcher and the
+	// particle renderer size their buffers from it once. UTGLR's VERTEX_ARRAY_SIZE bounds one flush, not one
+	// call, so any value up to 65535 would work here.
+	return 256;
+}
+
+void UOpenGLRenderDevice::DrawTriangles(FSceneNode* Frame, FTextureInfo& Info, FTransTexture** Pts, INT NumPts, _WORD* Indices, INT NumIndices, DWORD PolyFlags, FSpanBuffer* Span) {
+	UTGLR_DEBUG_CALL_COUNT(DrawTriangles);
+	guard(UOpenGLRenderDevice::DrawTriangles);
+
+	if (NumPts < 3) {
+		return;
+	}
+
+	PolyFlags = HP2AdjustPolyFlags(PolyFlags);
+
+	// Three input shapes, as in HP2's D3D7 driver (Indices ? indexed list : NumIndices == NumPts ? fan :
+	// list). Every triangle goes through UTGLR's buffered 3-vertex gouraud path, batched by (PolyFlags,
+	// texture) like v436 mesh triangles, so hit-select, the GUglyHackFlags near-Z range hack (first-person
+	// overlay meshes), masked-texture cache ids and vertex fog all apply.
+	if (Indices) {
+		// Indexed triangle list: every mesh (vertex, LOD and CPU-skinned skeletal, via the Render mesh batcher)
+		// and every particle system. Pts may hold vertices no index references (particles), so only the
+		// indexed ones are read; an out-of-range index drops its triangle instead of reading past Pts.
+		FTransTexture* Tri[3];
+		for (INT i = 0; i + 3 <= NumIndices; i += 3) {
+			const INT I0 = Indices[i + 0];
+			const INT I1 = Indices[i + 1];
+			const INT I2 = Indices[i + 2];
+			if ((I0 >= NumPts) || (I1 >= NumPts) || (I2 >= NumPts)) {
+				continue;
+			}
+			Tri[0] = Pts[I0];
+			Tri[1] = Pts[I1];
+			Tri[2] = Pts[I2];
+			HP2DrawGouraudPolygon(Frame, Info, Tri, 3, PolyFlags, Span);
+		}
+	}
+	else if (NumIndices == NumPts) {
+		// One convex polygon drawn as a fan: BSP decals, actor blob shadows included, and the base
+		// URenderDevice::DrawGouraudPolygon forwarder.
+		HP2DrawGouraudPolygon(Frame, Info, Pts, NumPts, PolyFlags, Span);
+	}
+	else {
+		// Plain triangle list of NumPts vertices (part of the interface; no 433 caller uses it).
+		for (INT v = 0; v + 3 <= NumPts; v += 3) {
+			HP2DrawGouraudPolygon(Frame, Info, &Pts[v], 3, PolyFlags, Span);
+		}
+	}
+
+	unguard;
+}
+#endif
+
 void UOpenGLRenderDevice::DrawTile(FSceneNode* Frame, FTextureInfo& Info, FLOAT X, FLOAT Y, FLOAT XL, FLOAT YL, FLOAT U, FLOAT V, FLOAT UL, FLOAT VL, class FSpanBuffer* Span, FLOAT Z, FPlane Color, FPlane Fog, DWORD PolyFlags) {
 	UTGLR_DEBUG_CALL_COUNT(DrawTile);
 	guard(UOpenGLRenderDevice::DrawTile);
@@ -4408,6 +4542,11 @@ void UOpenGLRenderDevice::DrawTile(FSceneNode* Frame, FTextureInfo& Info, FLOAT 
 
 	//DrawTile does not use PolyFlags2
 	const DWORD PolyFlags2 = 0;
+
+#ifdef UTGLR_ENGINE_HP2
+	//Tiles take the v436 path; a content bit never selects the internal straight-alpha mode
+	PolyFlags &= ~PF_AlphaBlend;
+#endif
 
 	EndGouraudPolygonBuffering();
 
@@ -4524,7 +4663,13 @@ void UOpenGLRenderDevice::DrawTile(FSceneNode* Frame, FTextureInfo& Info, FLOAT 
 #else
 			if (Info.Palette && Info.Palette[128].A != 255 && !(PolyFlags & PF_Translucent)) {
 #endif
+#ifdef UTGLR_ENGINE_HP2
+				//As in HP2's D3D7 driver: an alpha-palette tile is premultiplied PF_Highlighted without
+				//PF_Occlude, so its transparent texels write no depth (world sprites)
+				PolyFlags |= PF_Highlighted;
+#else
 				PolyFlags |= PF_Highlighted | PF_Occlude;
+#endif
 			}
 
 			//Set default texture state
@@ -4675,7 +4820,12 @@ void UOpenGLRenderDevice::DrawTile(FSceneNode* Frame, FTextureInfo& Info, FLOAT 
 #else
 		if (Info.Palette && Info.Palette[128].A != 255 && !(PolyFlags & PF_Translucent)) {
 #endif
+#ifdef UTGLR_ENGINE_HP2
+			//Premultiplied PF_Highlighted without PF_Occlude, as in the buffered path
+			PolyFlags |= PF_Highlighted;
+#else
 			PolyFlags |= PF_Highlighted | PF_Occlude;
+#endif
 		}
 
 		SetBlend(PolyFlags);
@@ -4751,8 +4901,16 @@ void UOpenGLRenderDevice::Draw3DLine(FSceneNode* Frame, FPlane Color, DWORD Line
 	SetDefaultShaderState();
 	SetDefaultTextureState();
 
+#ifdef UTGLR_ENGINE_HP2
+	//433 LINE_PreTransformed: the points are already in camera space, as in URenderDevice::Draw3DLine
+	if (!(LineFlags & LINE_PreTransformed)) {
+		P1 = P1.TransformPointBy(Frame->Coords);
+		P2 = P2.TransformPointBy(Frame->Coords);
+	}
+#else
 	P1 = P1.TransformPointBy(Frame->Coords);
 	P2 = P2.TransformPointBy(Frame->Coords);
+#endif
 	if (Frame->Viewport->IsOrtho()) {
 		// Zoom.
 		FLOAT rcpZoom = 1.0f / Frame->Zoom;
@@ -6286,7 +6444,7 @@ void UOpenGLRenderDevice::SetBlendNoCheck(DWORD blendFlags) {
 
 #ifdef UTGLR_RUNE_BUILD
 	const DWORD GL_BLEND_FLAG_BITS = PF_Translucent | PF_Modulated | PF_Highlighted | PF_AlphaBlend;
-#elif UTGLR_UNREAL_227_BUILD
+#elif defined(UTGLR_HAS_ALPHABLEND)	// Unreal 227, HP2
 	const DWORD GL_BLEND_FLAG_BITS = PF_Translucent | PF_Modulated | PF_Highlighted | PF_AlphaBlend;
 #else
 	const DWORD GL_BLEND_FLAG_BITS = PF_Translucent | PF_Modulated | PF_Highlighted;
@@ -6313,7 +6471,7 @@ void UOpenGLRenderDevice::SetBlendNoCheck(DWORD blendFlags) {
 			else if (blendFlags & PF_AlphaBlend) {
 				glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 			}
-#elif UTGLR_UNREAL_227_BUILD
+#elif defined(UTGLR_HAS_ALPHABLEND)	// Unreal 227, HP2: straight alpha
 			else if (blendFlags & PF_AlphaBlend) {
 				glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 			}
@@ -6457,7 +6615,35 @@ void UOpenGLRenderDevice::SetTexEnvNoCheck(DWORD texUnit, DWORD texEnvFlags) {
 			glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE1_ALPHA_EXT, GL_PREVIOUS_EXT);
 
 			glTexEnvf(GL_TEXTURE_ENV, GL_RGB_SCALE_EXT, 2.0f);
+#ifdef UTGLR_ENGINE_HP2
+			if (texUnit != 0) {
+				//A modulating unit after the base (lightmap, macro) passes the base alpha through instead of
+				//multiplying in its own: UTGLR uploads RGBA7 lightmaps x2 including A, which would otherwise
+				//scale a Lumos surface's opacity texel by texel. Only masked/alpha-blended bases read this alpha.
+				glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA_EXT, GL_REPLACE);
+				glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_ALPHA_EXT, GL_PREVIOUS_EXT);
+			}
+#endif
 		}
+#ifdef UTGLR_ENGINE_HP2
+		else if ((texUnit != 0) && SUPPORTS_GL_EXT_texture_env_combine) {
+			//OneXBlending: the same alpha pass-through at 1x colour scale (plain GL_MODULATE would multiply alpha)
+			glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE_EXT);
+
+			glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB_EXT, GL_MODULATE);
+			glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA_EXT, GL_REPLACE);
+
+			glTexEnvi(GL_TEXTURE_ENV, GL_OPERAND0_RGB_EXT, GL_SRC_COLOR);
+			glTexEnvi(GL_TEXTURE_ENV, GL_OPERAND1_RGB_EXT, GL_SRC_COLOR);
+
+			glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_RGB_EXT, GL_TEXTURE);
+			glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE1_RGB_EXT, GL_PREVIOUS_EXT);
+
+			glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_ALPHA_EXT, GL_PREVIOUS_EXT);
+
+			glTexEnvf(GL_TEXTURE_ENV, GL_RGB_SCALE_EXT, 1.0f);
+		}
+#endif
 		else {
 			glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
 		}
@@ -7188,6 +7374,18 @@ void UOpenGLRenderDevice::RenderPassesNoCheckSetup(void) {
 	SetDefaultShaderState();
 
 	glColor3fv(m_complexSurfaceColor3f_1f);
+#ifdef UTGLR_ENGINE_HP2
+	if (MultiPass.TMU[0].PolyFlags & PF_AlphaBlend) {
+		//Lumos: opacity rides the primary colour's alpha -> unit 0 alpha = texA * opacity; the lightmap/macro
+		//units pass it through untouched (SetTexEnvNoCheck), so the blender sees exactly texA * (1 - cAlpha/255)
+		glColor4f(m_complexSurfaceColor3f_1f[0], m_complexSurfaceColor3f_1f[1], m_complexSurfaceColor3f_1f[2], m_hp2SurfOpacity);
+	}
+	else if ((m_hp2SurfOpacity < 1.0f) && (MultiPass.TMU[0].PolyFlags == PF_Highlighted)) {
+		//Lumos: the separate fog-map pass over a see-through surface is premultiplied (GL_ONE,
+		//GL_ONE_MINUS_SRC_ALPHA): scale all four channels so the fog fades with the surface
+		glColor4f(m_hp2SurfOpacity, m_hp2SurfOpacity, m_hp2SurfOpacity, m_hp2SurfOpacity);
+	}
+#endif
 
 	SetBlend(MultiPass.TMU[0].PolyFlags);
 
