@@ -1778,11 +1778,22 @@ bool UOpenGLRenderDevice::GetGL1Procs(void) {
 	unguard;
 }
 
+//The extension list is logged at the first SetRes of the process, at a later one only with -UFRONTLOG
+static bool g_extensionsLogged = false;
+
+static bool LogGLExtensions(void) {
+#ifdef UTGLR_ENGINE_UT99DC
+	return !g_extensionsLogged || GUfrontLog;
+#else
+	return true;
+#endif
+}
+
 bool UOpenGLRenderDevice::FindGLExt(const char *pName) {
 	guard(UOpenGLRenderDevice::FindGLExt);
 
 	bool bRet = IsGLExtensionSupported((const char *)glGetString(GL_EXTENSIONS), pName);
-	if (bRet) {
+	if (bRet && LogGLExtensions()) {
 		debugf(NAME_Init, TEXT("Device supports: %s"), appFromAnsi(pName));
 	}
 	if (DebugBit(DEBUG_BIT_BASIC)) {
@@ -2105,17 +2116,20 @@ UBOOL UOpenGLRenderDevice::SetRes(INT NewX, INT NewY, INT NewColorBytes, UBOOL F
 
 	// vogel: logging of more than 1024 characters is dangerous at the moment.
 	const char *pGLExtensions = (const char *)glGetString(GL_EXTENSIONS);
-	if (strlen(pGLExtensions) < 1024) {
-		debugf(NAME_Init, TEXT("GL_EXTENSIONS : %s"), appFromAnsi(pGLExtensions));
-	}
-	else {
+	if (LogGLExtensions()) {
+		if (strlen(pGLExtensions) < 1024) {
+			debugf(NAME_Init, TEXT("GL_EXTENSIONS : %s"), appFromAnsi(pGLExtensions));
+		}
+		else {
 #ifdef UTGLR_USE_SDL
-		printf("GL_EXTENSIONS : %s\n", pGLExtensions);
+			printf("GL_EXTENSIONS : %s\n", pGLExtensions);
 #endif
+		}
 	}
 
 	//Get OpenGL extension function pointers
 	GetGLExtProcs();
+	g_extensionsLogged = true;
 
 	debugf(NAME_Init, TEXT("Depth bits: %u"), m_numDepthBits);
 	if (DebugBit(DEBUG_BIT_BASIC)) dbgPrintf("utglr: Depth bits: %u\n", m_numDepthBits);

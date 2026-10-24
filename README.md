@@ -35,6 +35,8 @@ It adds:
 * **Multisampled back buffer on the web**: `UseAA` asks the engine for a back buffer with `NumAASamples`
   samples (`ufront_backbuffer_samples`, WebGL 2 only).
 * **LP64 pointer arithmetic**: pointer alignment and the bind-map node offset go through `UPTRINT`.
+* **The extension list once a process**: `GL_EXTENSIONS` and the `Device supports` lines are logged at the first
+  `SetRes`; a later one logs them only with the engine's `-UFRONTLOG`.
 
 For HP2 (`UTGLR_ENGINE_HP2`):
 
