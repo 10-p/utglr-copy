@@ -1778,12 +1778,13 @@ bool UOpenGLRenderDevice::GetGL1Procs(void) {
 	unguard;
 }
 
-//The extension list is logged at the first SetRes of the process, at a later one only with -UFRONTLOG
-static bool g_extensionsLogged = false;
+//The device information (GL strings, extensions, depth and AA bits, texture units and limits) is logged at the
+//first SetRes of the process, at a later one only with -UFRONTLOG
+static bool g_deviceInfoLogged = false;
 
-static bool LogGLExtensions(void) {
+static bool LogDeviceInfo(void) {
 #ifdef UTGLR_ENGINE_UT99DC
-	return !g_extensionsLogged || GUfrontLog;
+	return !g_deviceInfoLogged || GUfrontLog;
 #else
 	return true;
 #endif
@@ -1793,7 +1794,7 @@ bool UOpenGLRenderDevice::FindGLExt(const char *pName) {
 	guard(UOpenGLRenderDevice::FindGLExt);
 
 	bool bRet = IsGLExtensionSupported((const char *)glGetString(GL_EXTENSIONS), pName);
-	if (bRet && LogGLExtensions()) {
+	if (bRet && LogDeviceInfo()) {
 		debugf(NAME_Init, TEXT("Device supports: %s"), appFromAnsi(pName));
 	}
 	if (DebugBit(DEBUG_BIT_BASIC)) {
@@ -2110,13 +2111,13 @@ UBOOL UOpenGLRenderDevice::SetRes(INT NewX, INT NewY, INT NewColorBytes, UBOOL F
 	// Get info and extensions.
 
 	//PrintFormat( hDC, nPixelFormat );
-	debugf(NAME_Init, TEXT("GL_VENDOR     : %s"), appFromAnsi((const ANSICHAR *)glGetString(GL_VENDOR)));
-	debugf(NAME_Init, TEXT("GL_RENDERER   : %s"), appFromAnsi((const ANSICHAR *)glGetString(GL_RENDERER)));
-	debugf(NAME_Init, TEXT("GL_VERSION    : %s"), appFromAnsi((const ANSICHAR *)glGetString(GL_VERSION)));
+	if (LogDeviceInfo()) debugf(NAME_Init, TEXT("GL_VENDOR     : %s"), appFromAnsi((const ANSICHAR *)glGetString(GL_VENDOR)));
+	if (LogDeviceInfo()) debugf(NAME_Init, TEXT("GL_RENDERER   : %s"), appFromAnsi((const ANSICHAR *)glGetString(GL_RENDERER)));
+	if (LogDeviceInfo()) debugf(NAME_Init, TEXT("GL_VERSION    : %s"), appFromAnsi((const ANSICHAR *)glGetString(GL_VERSION)));
 
 	// vogel: logging of more than 1024 characters is dangerous at the moment.
 	const char *pGLExtensions = (const char *)glGetString(GL_EXTENSIONS);
-	if (LogGLExtensions()) {
+	if (LogDeviceInfo()) {
 		if (strlen(pGLExtensions) < 1024) {
 			debugf(NAME_Init, TEXT("GL_EXTENSIONS : %s"), appFromAnsi(pGLExtensions));
 		}
@@ -2129,12 +2130,11 @@ UBOOL UOpenGLRenderDevice::SetRes(INT NewX, INT NewY, INT NewColorBytes, UBOOL F
 
 	//Get OpenGL extension function pointers
 	GetGLExtProcs();
-	g_extensionsLogged = true;
 
-	debugf(NAME_Init, TEXT("Depth bits: %u"), m_numDepthBits);
+	if (LogDeviceInfo()) debugf(NAME_Init, TEXT("Depth bits: %u"), m_numDepthBits);
 	if (DebugBit(DEBUG_BIT_BASIC)) dbgPrintf("utglr: Depth bits: %u\n", m_numDepthBits);
 	if (m_usingAA) {
-		debugf(NAME_Init, TEXT("AA samples: %u"), m_initNumAASamples);
+		if (LogDeviceInfo()) debugf(NAME_Init, TEXT("AA samples: %u"), m_initNumAASamples);
 		if (DebugBit(DEBUG_BIT_BASIC)) dbgPrintf("utglr: AA samples: %u\n", m_initNumAASamples);
 	}
 
@@ -2307,7 +2307,7 @@ UBOOL UOpenGLRenderDevice::SetRes(INT NewX, INT NewY, INT NewColorBytes, UBOOL F
 
 	if (UseMultiTexture) {
 		glGetIntegerv(GL_MAX_TEXTURE_UNITS_ARB, &TMUnits);
-		debugf(TEXT("%i Texture Mapping Units found"), TMUnits);
+		if (LogDeviceInfo()) debugf(TEXT("%i Texture Mapping Units found"), TMUnits);
 		if (TMUnits > MaxTMUnits) {
 			TMUnits = MaxTMUnits;
 		}
@@ -2341,7 +2341,7 @@ UBOOL UOpenGLRenderDevice::SetRes(INT NewX, INT NewY, INT NewColorBytes, UBOOL F
 	if (MaxAnisotropy) {
 		GLint iMaxAnisotropyLimit = 1;
 		glGetIntegerv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT, &iMaxAnisotropyLimit);
-		debugf(TEXT("MaxAnisotropy: %i"), iMaxAnisotropyLimit);
+		if (LogDeviceInfo()) debugf(TEXT("MaxAnisotropy: %i"), iMaxAnisotropyLimit);
 		if (MaxAnisotropy > iMaxAnisotropyLimit) {
 			MaxAnisotropy = iMaxAnisotropyLimit;
 		}
@@ -2350,7 +2350,7 @@ UBOOL UOpenGLRenderDevice::SetRes(INT NewX, INT NewY, INT NewColorBytes, UBOOL F
 	BufferActorTris = UseVertexSpecular; // Only buffer when we can use 1 pass fogging
 
 	if (SupportsTC) {
-		debugf(TEXT("Trying to use S3TC extension."));
+		if (LogDeviceInfo()) debugf(TEXT("Trying to use S3TC extension."));
 	}
 
 	//Use default if MaxLogTextureSize <= 0
@@ -2370,12 +2370,13 @@ UBOOL UOpenGLRenderDevice::SetRes(INT NewX, INT NewY, INT NewColorBytes, UBOOL F
 	MaxLogUOverV = MaxLogTextureSize;
 	MaxLogVOverU = MaxLogTextureSize;
 
-	debugf(TEXT("MinLogTextureSize: %i"), MinLogTextureSize);
-	debugf(TEXT("MaxLogTextureSize: %i"), MaxLogTextureSize);
+	if (LogDeviceInfo()) debugf(TEXT("MinLogTextureSize: %i"), MinLogTextureSize);
+	if (LogDeviceInfo()) debugf(TEXT("MaxLogTextureSize: %i"), MaxLogTextureSize);
 
-	debugf(TEXT("BufferActorTris: %i"), BufferActorTris);
+	if (LogDeviceInfo()) debugf(TEXT("BufferActorTris: %i"), BufferActorTris);
 
-	debugf(TEXT("UseDetailAlpha: %i"), UseDetailAlpha);
+	if (LogDeviceInfo()) debugf(TEXT("UseDetailAlpha: %i"), UseDetailAlpha);
+	g_deviceInfoLogged = true;
 
 
 	//Set pointers to aligned memory
